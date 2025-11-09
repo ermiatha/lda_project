@@ -1,0 +1,707 @@
+---
+title: "LDA project 1"
+author: "Matteo Venturini"
+date: "2025-10-29"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load libraries
+```{r}
+# install.packages('haven')
+# Install.packages('tidyr')
+# Install.packages('dplyr')
+# Install.packages('(ggplot2')
+# install.packages('lmerTest')
+# install.packages('glmmTMB')
+# install.packages('RLRsim')
+
+library(haven)
+library(kableExtra)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(lme4) # no p-values
+
+library(lmerTest)
+library(nlme)
+library(glmmTMB)
+library(RLRsim)
+
+
+
+
+```
+
+
+Load data
+```{r}
+df <- read_sas("alzheimer25.sas7bdat")
+write.csv(df, "df.csv", row.names = FALSE)
+```
+
+
+Data reshaping
+```{r}
+cols_to_pivot <- c('bprs0', 'bprs1', 'bprs2', 'bprs3', 'bprs4', 'bprs5', 'bprs6')
+df_long <- df %>%
+  pivot_longer(
+    cols = cols_to_pivot,   # columns to gather
+    names_to = "year",        # new column for old column names
+    values_to = "bprs_score"           # new column for values
+  )
+
+
+```
+
+
+Some formatting
+```{r}
+df_long$sex <- as.factor(df_long$sex)
+df_long$wzc <- as.factor(df_long$wzc)
+
+df_long <- df_long %>%
+  mutate(year_factor = case_when(year == 'bprs0' ~ '0',
+                          year == 'bprs1' ~ '1',
+                          year == 'bprs2' ~ '2', 
+                          year == 'bprs3' ~ '3', 
+                          year == 'bprs4' ~ '4',
+                          year == 'bprs5' ~ '5', 
+                          year == 'bprs6' ~ '6'))
+
+df_long$year_numeric <- as.numeric(df_long$year_factor)
+
+```
+
+# EDA
+
+Exploring the correlation structure
+
+```{r}
+M <- cor(df[, c("cdrsb0", "bprs0", "abpet0", "taupet0", "inkomen","bmi", "job", "trial", "adl", "age", "wzc")],
+         use = "pairwise.complete.obs")
+
+library(reshape2)
+
+melted_M <- melt(M)
+
+ggplot(melted_M, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(fill = "Correlation", x = "", y = "", 
+       title = "Correlation Heatmap")
+```
+
+
+```{r}
+
+
+# Select only the BPRS score columns
+bprs_wide <- df %>% 
+  select(bprs0:bprs6)
+
+# Calculate the correlation matrix, handling missing values
+cor_matrix <- cor(bprs_wide, use = "pairwise.complete.obs")
+
+# Print the rounded matrix to make it readable
+print(round(cor_matrix, 2))
+
+
+
+```
+
+
+
+Correlation of cogninitive and clinical measurements at baseline
+
+
+```{r}
+
+cognitive_and_clinical_baseline <- df %>% 
+  select(bprs0, cdrsb0, abpet0, taupet0)
+
+cor(cognitive_and_clinical_baseline)
+```
+
+
+Exploring the mean structure (BPRS)
+```{r}
+
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=sex)) + 
+  geom_jitter() + 
+  scale_color_discrete(name = "sex", labels = c("Male", "Female")) + 
+  theme_minimal() + 
+  labs(title = 'Individual BPRS score as function of time and sex',
+       x='Year',
+       y='BPRS score') 
+
+# Make sure you have a subject identifier column, here assumed to be 'id'
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=sex, group=patid)) + 
+  # geom_line() connects the points for each individual
+  geom_line(alpha = 0.4) + # alpha makes the lines semi-transparent
+  
+  # geom_point() shows the actual measurement points
+  geom_point(alpha = 0.6) +
+  
+  scale_color_discrete(name = "Sex", labels = c("Male", "Female")) + 
+  theme_minimal() + 
+  labs(title = 'Individual BPRS Score Profiles Over Time by Sex',
+       x='Year',
+       y='BPRS Score')
+
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=sex, group=sex)) + 
+  stat_summary(fun = mean, geom = "line", size = 1) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.3) +
+  scale_color_discrete(name = "Sex", labels = c("Male", "Female")) + 
+  theme_minimal() + 
+  labs(title = 'Average BPRS score as function of time and sex',
+       x = 'Year',
+       y = 'BPRS Score')
+
+dropouts_gender <- df %>% 
+  group_by(sex) %>%
+  summarise(year_0 = sum(!is.na(bprs0)),
+            year_1 = sum(!is.na(bprs1)),
+            year_2 = sum(!is.na(bprs2)), 
+            year_3 = sum(!is.na(bprs3)),
+            year_4 = sum(!is.na(bprs4)),
+            year_5 = sum(!is.na(bprs5)),
+            year_6 = sum(!is.na(bprs6))) %>%
+  ungroup() %>%
+  mutate(sex = case_when(sex == 0 ~ 'Male',
+                         sex == 1 ~ 'Female'))
+
+dropouts_gender %>%
+  kable(caption = "Number of Patients by Sex at Each Measurement Year") %>%
+  column_spec(
+    column = 1:ncol(dropouts_gender)
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=age)) + 
+  geom_jitter() + 
+  theme_minimal() + 
+  labs(title = 'BPRS score as function of time and age',
+       x='Year',
+       y='BPRS score')
+
+
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=age, group=age)) + 
+  stat_summary(fun = mean, geom = "line", size = 1) + 
+  scale_color_continuous(name = "Age") + 
+  theme_minimal() + 
+  labs(title = 'Average BPRS score as function of time and sex',
+       x = 'Year',
+       y = 'BPRS Score')
+
+dropouts_age <- df %>% 
+  mutate(sex = case_when(sex == 0 ~ 'Male',
+                         sex == 1 ~ 'Female'))%>%
+  group_by(age) %>%
+  summarise(year_0 = sum(!is.na(bprs0)),
+            year_1 = sum(!is.na(bprs1)),
+            year_2 = sum(!is.na(bprs2)), 
+            year_3 = sum(!is.na(bprs3)),
+            year_4 = sum(!is.na(bprs4)),
+            year_5 = sum(!is.na(bprs5)),
+            year_6 = sum(!is.na(bprs6))) %>%
+  ungroup() 
+
+
+dropouts_age %>%
+  kable(caption = "Number of Patients by Age at Each Measurement Year") %>%
+  column_spec(
+    column = 1:ncol(dropouts_age)
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+
+
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=wzc)) + 
+  geom_jitter() + 
+  scale_color_discrete(name = "wzc", labels = c("Other", "Nursing home resident")) +
+  theme_minimal() + 
+  labs(title = 'BPRS score as function of time and wzc',
+       x='Year',
+       y='BPRS score')
+
+ggplot(data=df_long, aes(x=year_factor, y=bprs_score, color=wzc, group=wzc)) + 
+  stat_summary(fun = mean, geom = "line", size = 1) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.3) +
+  scale_color_discrete(name = "wzc", labels = c("Other", "Nursing home resident")) + 
+  theme_minimal() + 
+  labs(title = 'Average BPRS score as function of time and wzc',
+       x = 'Year',
+       y = 'BPRS Score')
+
+
+dropouts_wzc <- df %>% 
+  mutate(wzc = case_when(wzc == 0 ~ 'Other',
+                         wzc == 1 ~ 'Nursing Home Resident'))%>%
+  group_by(wzc) %>%
+  summarise(year_0 = sum(!is.na(bprs0)),
+            year_1 = sum(!is.na(bprs1)),
+            year_2 = sum(!is.na(bprs2)), 
+            year_3 = sum(!is.na(bprs3)),
+            year_4 = sum(!is.na(bprs4)),
+            year_5 = sum(!is.na(bprs5)),
+            year_6 = sum(!is.na(bprs6))) %>%
+  ungroup() 
+
+dropouts_wzc %>%
+  kable(caption = "Number of Patients by wzc at Each Measurement Year") %>%
+  column_spec(
+    column = 1:ncol(dropouts_wzc)
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+
+# There seems to be no interaction effect between wzc and bprs as a function of time. It can be confirmed that the difference intercepts are a result of the mean age at baseline in the two groups
+wzc_mean_age_baseline <- df %>%
+  group_by(wzc) %>%
+  summarize(age = mean(age))
+
+print(wzc_mean_age_baseline)
+
+
+#####
+
+## It seems that there is no interaction effect between trial and bprs_score as a function of time. Most likely the different intercepts by trial are simply a result of different mean ages by trial, at baseline.
+
+# Compute average age at baseline (bprs0) for each trial
+trial_age_order <- df %>%
+  group_by(trial) %>%
+  summarise(avg_age = mean(age[!is.na(bprs0)], na.rm = TRUE)) %>%
+  arrange(avg_age) %>%
+  pull(trial)
+
+# Convert trial to a factor ordered by average baseline age
+df_long <- df_long %>%
+  mutate(trial = factor(trial, levels = trial_age_order))
+
+# Plot
+ggplot(data = df_long, aes(x = year_factor, y = bprs_score, 
+                           color = trial, group = trial)) + 
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  scale_color_discrete(name = "Trial (ordered by mean baseline age)") + 
+  theme_minimal() + 
+  labs(title = 'Average BPRS score as function of time and trial',
+       x = 'Year',
+       y = 'BPRS Score')
+
+
+## Again it seems that there is no interaction effect between ADL and bprs_score as a function of time, hinting that age is actually behind the effect of ADL on bprs. 
+
+# Plot
+ggplot(data = df_long, aes(x = year_factor, y = bprs_score, 
+                           color = as.factor(adl), group = as.factor(adl))) + 
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  scale_color_discrete(name = "ADL") + 
+  theme_minimal() + 
+  labs(title = 'Average BPRS score as function of time and trial',
+       x = 'Year',
+       y = 'BPRS Score')
+
+
+```
+
+```{r}
+non_na_counts <- df %>%
+  summarize(across(starts_with("bprs"), ~sum(!is.na(.))))
+
+plot_data <- non_na_counts %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "measurement_occasion",
+    values_to = "count"
+  )
+
+ggplot(plot_data, aes(x = measurement_occasion, y = count)) +
+  geom_col(fill = "steelblue", color = "black") + 
+  geom_text(aes(label = count), vjust = -0.5) + 
+  theme_minimal() +
+  labs(
+    title = "Number of Available Observations at Each Time Point",
+    x = "Year",
+    y = "Number of available observations"
+  )
+```
+
+
+
+
+Exploring the variance structure
+```{r}
+# 1. Create a summary dataframe with mean and standard deviation for each year_factor
+variance_summary <- df_long %>%
+  group_by(year_factor) %>%
+  summarise(
+    mean_bprs = mean(bprs_score, na.rm = TRUE),
+    sd_bprs = sd(bprs_score, na.rm = TRUE),
+    n = n() 
+  )
+
+# 2. Create the plot
+ggplot(variance_summary, aes(x = year_factor, y = mean_bprs, group = 1)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "blue", size = 3) +
+  
+  # Add error bars representing the standard deviation
+  geom_errorbar(
+    aes(ymin = mean_bprs - sd_bprs, ymax = mean_bprs + sd_bprs),
+    width = 0.2,
+    color = "black"
+  ) +
+  
+  theme_minimal() +
+  labs(
+    title = "Average BPRS Score with Standard Deviations",
+    subtitle = "Error bars represent Mean +/- 1 Standard Deviation",
+    x = "Year",
+    y = "BPRS Score"
+  )
+```
+
+
+
+OLS 
+```{r}
+
+# We fit a standard linear model (OLS) ignoring the patient-specific correlations.
+preliminary_ols_model <- lm(bprs_score ~ year_numeric + sex + age + wzc + adl, 
+                             data = df_long, na.action = na.exclude)
+
+
+# The residuals represent the part of the BPRS score that is NOT explained by the average trend.
+# In theory, this is what's left over for the random effects and residual error to explain.
+df_long$ols_residuals <- residuals(preliminary_ols_model)
+
+# If the random effects were just a random intercept (b_0i), these profiles should be flat but
+# shifted up or down for each patient, with random noise.
+# If there is a random slope (b_1i), we would expect to see individual slopes in these residual profiles.
+
+ggplot(df_long, aes(x = year_numeric, y = ols_residuals, group = patid)) +
+  geom_line(alpha = 0.3) + 
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "OLS Residual Profiles for Each Patient",
+       x = "Year (Numeric)",
+       y = "OLS Residuals") +
+  theme_minimal()
+```
+
+
+# Add semivariogram -> check which kind of serial correlation structure to use
+```{r}
+
+```
+
+
+
+
+# Mixed linear model
+
+Choose the Random-Effects Structure
+
+
+```{r}
+m1 <- lm(bprs_score ~ year_numeric * (sex + age + wzc + adl + job), data = df_long) # No random effects
+m2 <- lmer(bprs_score ~ year_numeric * (sex + age + wzc + adl + job) + (1 | patid), data = df_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
+m3 <- lmer(bprs_score ~ year_numeric * (sex + age + wzc + adl + job) + (year_numeric | patid), data = df_long, REML = TRUE) # model with random intercept and slope
+
+results <- data.frame(
+  Model = c("m1", "m2", "m3"),
+  AIC = AIC(m1, m2, m3),
+  BIC = BIC(m1, m2, m3)
+)
+
+
+print(results)
+
+```
+
+We proceed with model m3 
+
+
+Choose the Residual Correlation Structure
+
+```{r}
+library(nlme)
+
+# Your maximal fixed-effects formula
+formula_fe <- bprs_score ~ year_numeric * (sex + age + wzc + adl + job)
+
+# Model 1: Random intercept and slope, NO residual correlation
+model_no_corr <- lme(
+  fixed = formula_fe,
+  data = df_long,
+  random = ~ year_numeric | patid, 
+  method = "REML",
+  na.action = na.omit 
+)
+
+# Model 2: Same random effects, but WITH AR(1) residual correlation
+model_ar1 <- lme(
+  fixed = formula_fe,
+  data = df_long,
+  random = ~ year_numeric | patid,
+  correlation = corAR1(form = ~ year_numeric | patid),
+  method = "REML",
+  na.action = na.omit
+)
+
+anova(model_no_corr, model_ar1)
+
+
+
+```
+
+We choose model ... 
+
+
+Choose the mean structure
+
+```{r}
+m4 <- lme(bprs_score ~ year_numeric * (sex + age + wzc + adl + job),
+          data = df_long,
+  random = ~ year_numeric | patid,
+  correlation = corAR1(form = ~ year_numeric | patid),
+  method = "REML",
+  na.action = na.omit
+)
+
+summary(m4)
+```
+
+
+# Multivariate model
+
+Given the fact that half of the participants dropped out by the end of the study, an unstructured covariance cannot be specified. The model fails to converge.
+
+Covariance structure
+
+```{r}
+
+
+# Unstructured mean (one intercept and slope for each year and gender combination)
+# Structured covariance structure: Compound Symmetry
+model_unstructured1 <- lme(
+  bprs_score ~ year_factor*sex-1,  
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corCompSymm(form = ~ 1 | patid),
+  method = "REML",
+  na.action = na.omit
+)
+
+
+# Unstructured mean (one intercept and slope for each year and gender combination)
+# Structured covariance structure: Autoregressive
+model_unstructured2 <- lme(
+  bprs_score ~ year_factor*sex-1,  
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "REML",
+  na.action = na.omit
+)
+
+
+
+comparison_df <- data.frame(
+  Model = c("Compound Symmetry", "AR(1)"),
+  AIC = AIC(model_unstructured1, model_unstructured2)$AIC,
+  BIC = BIC(model_unstructured1, model_unstructured2)$BIC
+)
+
+print(comparison_df)
+
+
+
+```
+
+
+Mean structure
+
+```{r}
+
+
+# # Unstructured mean: here the model estimates a gender-specific and age-specific slope and intercept for each year.
+# model_mean_unstructured <- lme(
+#   bprs_score ~ year_factor * (sex + age),  
+#   data = df_long,
+#   random = ~ 1 | patid,         
+#   correlation = corAR1(form = ~ 1 | patid),
+#   method = "ML",
+#   na.action = na.omit
+# )
+# 
+# summary(model_mean_unstructured)
+# 
+# 
+# 
+# # Linear trend: here the model estimates a gender-specific and age-specific intercept and slope, identical across years. 
+# model_mean_linear_slopes <- lme(
+#   bprs_score ~ year_numeric * (sex + age), 
+#   data = df_long,
+#   random = ~ 1 | patid,         
+#   correlation = corAR1(form = ~ 1 | patid),
+#   method = "ML",
+#   na.action = na.omit
+# )
+# 
+# summary(model_mean_linear_slopes)
+# 
+# 
+# # Linear trend no age: here the model estimates a gender-specific intercept and slope, identical across years. It also estimates an age-specific intercept. 
+# model_mean_linear_slopes_no_age <- lme(
+#   bprs_score ~ year_numeric * sex + age, 
+#   data = df_long,
+#   random = ~ 1 | patid,         
+#   correlation = corAR1(form = ~ 1 | patid),
+#   method = "ML",
+#   na.action = na.omit
+# )
+# 
+# summary(model_mean_linear_slopes_no_age)
+# 
+# # Linear trend no sex: here the model estimates a sex-specific intercept and slope, identical across years. It also estimates a sex-specific intercept.
+# model_mean_linear_slopes_no_sex <- lme(
+#   bprs_score ~ year_numeric * age + sex, 
+#   data = df_long,
+#   random = ~ 1 | patid,         
+#   correlation = corAR1(form = ~ 1 | patid),
+#   method = "ML",
+#   na.action = na.omit
+# )
+# 
+# summary(model_mean_linear_slopes_no_sex)
+# 
+# 
+# 
+# # Linear trend parallel: here the model assumes no interaction. There is one single slope, and a gender-specific and sex-specific intercept. 
+# model_mean_parallel_slopes <- lme(
+#   bprs_score ~ year_numeric + sex + age,
+#   data = df_long,
+#   random = ~ 1 | patid,         
+#   correlation = corAR1(form = ~ 1 | patid),
+#   method = "ML",
+#   na.action = na.omit
+# )
+# 
+# summary(model_mean_parallel_slopes)
+# 
+# anova(model_mean_unstructured,model_mean_linear_slopes, model_mean_linear_slopes_no_age, model_mean_linear_slopes_no_sex, model_mean_parallel_slopes)
+
+
+```
+```{r}
+# Unstructured mean: gender-specific and age-specific intercepts and slopes, for each year. Addionally there are adl and wzc-specific intercepts. 
+model_mean_unstructured <- lme(
+  bprs_score ~ year_factor * (sex + age) + adl + wzc,  
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model_mean_unstructured)
+
+
+# Linear trend: age-specific intercept and slope common across years. Additionally there are sex, adl and wzc-specific intercepts. 
+model_mean_linear_slopes <- lme(
+  bprs_score ~ year_numeric * age + sex + adl + wzc, 
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model_mean_linear_slopes)
+
+
+
+# Linear trend: A common slope and age, adl, wzc and sex-specific intercepts. 
+model_mean_parallel_slopes <- lme(
+  bprs_score ~ year_numeric + age + adl + wzc + sex, 
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model_mean_parallel_slopes)
+
+
+# Linear trend: A common slope and age and sex-specific intercepts. 
+model_mean_parallel_slopes2 <- lme(
+  bprs_score ~ year_numeric + sex + age,
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model_mean_parallel_slopes2)
+
+
+# Model comparison (likelihood-based)
+anova(
+  model_mean_unstructured,
+  model_mean_linear_slopes,
+  model_mean_parallel_slopes,
+  model_mean_parallel_slopes2
+)
+
+```
+
+Models with cdrsb0 + abpet0 + taupet0 
+
+```{r}
+model1 <- lme(
+  bprs_score ~ year_numeric * (age + sex + cdrsb0 + abpet0 + taupet0), 
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model1) 
+
+model2 <- lme(
+  bprs_score ~ year_numeric * age + sex + cdrsb0 + abpet0 + taupet0, 
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model2)
+model3 <- lme(
+  bprs_score ~ year_numeric + age + sex + cdrsb0 + abpet0 + taupet0, 
+  data = df_long,
+  random = ~ 1 | patid,         
+  correlation = corAR1(form = ~ 1 | patid),
+  method = "ML",
+  na.action = na.omit
+)
+
+summary(model3)
+
+anova(model1, model2, model3, model_mean_parallel_slopes)
+
+```
+
