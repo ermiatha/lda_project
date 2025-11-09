@@ -1,0 +1,51 @@
+---
+title: "Linear Models"
+author: "Ermioni Athanasiadi"
+date: "24/20/2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r library, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(haven)
+library(data.table)
+```
+
+
+```{r}
+getwd()
+
+setwd("./../../data")
+
+filename <- "alzheimer25.sas7bdat"
+
+dat <- read_sas(filename)
+dat_dt <- setDT(read_sas(filename))
+```
+
+```{r}
+summary(dat)
+attributes(dat)
+```
+
+# Data Exploration
+#### CDRS and BPRS over time
+```{r}
+
+plot(cdrs ~ time)
+plot(bprs ~ time)
+
+```
+
+```{r}
+
+```
+
+
