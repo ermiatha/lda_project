@@ -1,0 +1,127 @@
+---
+title: "Question 2"
+author: "Rafke Niemans"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+libraries <- c(
+  "haven", "dplyr", "tidyr", "ggplot2", "reshape2",
+  "viridis", "knitr", "kableExtra", "e1071"
+)
+
+dat <- read_sas("alzheimer25.sas7bdat")
+str(dat)
+colSums(is.na(dat))
+
+```
+
+# Data Preparation; reshaping 
+
+```{r reshape}
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat_long) {
+
+    dat_long <- dat_long %>%
+        mutate(
+            time = as.factor(time),  # coded 0-6
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+            time_num = as.numeric(time)  # coded 1-7
+        )
+    dat_long
+}
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+```
+
+## Q2.  What summary statistics are appropriate for the analysis of these data ? Why ? Do they yield the same results ? Summarize your conclusion
+
+Since dataset tracks values across time (year 0–6), it is useful to summarize change over time using:
+
+- Mean (or median) per year
+- Repeated-measures statistics: t-test 
+
+```{r summary statistics}
+# median and mean per year per variable 
+med_mean_df <- dat_long %>%
+  group_by(time, inkomen, .add = TRUE) %>%
+  summarise(
+    mean_cdrsb = mean(cdrsb, na.rm = TRUE),
+    median_cdrsb = median(cdrsb, na.rm = TRUE),
+    mean_bprs = mean(bprs, na.rm = TRUE),
+    median_bprs = median(bprs, na.rm = TRUE),
+    mean_abpet = mean(abpet, na.rm = TRUE),
+    median_abpet = median(abpet, na.rm = TRUE),
+    mean_taupet = mean(taupet, na.rm = TRUE),
+    median_taupet = median(taupet, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+
+
+# paired t-tests
+t.test(dat$cdrsb0, dat$cdrsb6, paired = TRUE)
+t.test(dat$bprs0,  dat$bprs6,  paired = TRUE)
+t.test(dat$abpet0, dat$abpet6, paired = TRUE)
+t.test(dat$taupet0,dat$taupet6,paired = TRUE)
+
+print(med_mean_df)
+```
+
+```{r boxplots}
+dat_long_plot <- dat_long %>%
+  pivot_longer(
+    cols = c(cdrsb, bprs, abpet, taupet),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(dat_long_plot, aes(x = time, y = value, fill = time)) +
+  geom_boxplot(outlier.alpha = 0.3, width = 0.6, color = "grey30") +
+  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Distribution of CDRSB, BPRS, ABPET, and TAUPET over time",
+    subtitle = "Median, IQR, and outliers per year",
+    x = "Year",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+```{r histograms skewness check}
+hist(dat_long$bprs)
+hist(dat_long$cdrsb)
+hist(dat_long$abpet)
+hist(dat_long$taupet)
+```
+
+Among the four measures, BPRS shows by far the greatest change across time, with a mean difference of -42.31.
+
+This indicates that behavioral and psychiatric deterioration dominates the longitudinal trajectory, whereas cognitive decline (CDRSB) is more moderate, and biological markers (ABPET, TAUPET) show much smaller absolute shifts.
+
+All variables show statistically significant changes, but their effect sizes differ dramatically — emphasizing that statistical significance does not equal importance in the clinical field. 
+
+No they do **not** yield the same results — mean vs median or parametric vs nonparametric summaries don’t always agree: If data are symmetric then mean ≈ median.
+
+However, for especially ABPET and CDRSB, respectively, there are outliers and the distribution is heavily right-skewed, hence mean ≠ median. In that case the median tends to be a more suitable descriptive statistic, as it describes central tendency better. 
