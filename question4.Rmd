@@ -1,0 +1,136 @@
+---
+title: "question3"
+author: "Ermioni Athanasiadi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(haven)
+library(tidyverse)
+library(patchwork)
+library(pROC)
+library(nlme)
+library(data.table)
+library(broom)
+
+```
+
+
+```{r}
+setwd("./assignment1/data")
+
+filename <- "alzheimer25.sas7bdat"
+
+dat <- read_sas(filename)
+dat_dt <- setDT(read_sas(filename))
+```
+
+
+# Q4: Two-stage analysis
+
+We will build a model in two stages:
+
+Stage 1: Separate linear regression model for each subject --> we predict the outcome of interest
+Stage 2: Model for the different subject-specific coefficients --> we predict the coefficients
+
+Since we have several coefficients in each subject-model, we will have to model each of these coefficient vectors for each subject
+
+
+Time is the predictor for our stage 1 model.
+
+Stage 2 predictors: 
+
+- sex
+- age
+- trial
+
+- edu
+- job 
+- adl 
+- wzc
+
+- bmi
+- cdrsb 
+- abpet 
+- taupet
+
+However, if understood correctly, a two-stage analysis for n subejcts would require n regression models in stage 1.
+This corresponds to n = 1253 models, or n = 1106 if we exclude subjects with only 1 observation for the outcome of interest.
+
+We know from the lectures that two-stage modeling will yield an acceptable marginal model if most of the variance is found between subjects.
+
+
+```{r}
+# only subjects with > 1 obs
+stage1_coefs <- dat_long_cmpl2 %>%
+  select(patid, time, bprs) %>%
+  group_by(patid) %>%
+  summarise(patid = first(patid),
+            #model = lm(bprs ~ time, data = .),
+            beta0 = coef(lm(bprs ~ time))[1],
+            beta1 = coef(lm(bprs ~ time))[2],
+            beta2 = coef(lm(bprs ~ time))[3],
+            beta3 = coef(lm(bprs ~ time))[4],
+            beta4 = coef(lm(bprs ~ time))[5],
+            beta5 = coef(lm(bprs ~ time))[6]
+            )
+
+# also with n = 147 subjects with 1 obs -> but respective betas are NA
+stage1_coefs_num <- dat_long_cmpl %>%
+  select(patid, time_num, bprs) %>%
+  group_by(patid) %>%
+  summarise(patid = first(patid),
+            #model = lm(bprs ~ time, data = .),
+            beta0 = coef(lm(bprs ~ time_num))[1],
+            beta1 = coef(lm(bprs ~ time_num))[2]
+            )
+```
+
+
+Stage 2 Model:
+```{r}
+stage2_covars <- dat_long_cmpl %>% distinct(patid, age, sex, trial, edu, bmi, job, adl, wzc)  # , cdrsb, abpet, taupet
+
+```
+
+If we want to include time-varying predictors like the biomarkers or cognitive ratings, how to obtain a distinct set of covariates per subject? It will have more than 1 row.
+
+
+```{r}
+df_twostage <- left_join(stage1_coefs, stage2_covars, by = "patid")
+
+m_beta0 <- lm(beta0 ~ age + sex + trial + edu + bmi + job + adl + wzc, data = df_twostage)
+
+m_beta1 <- lm(beta1 ~ age + sex + trial + edu + bmi + job + adl + wzc, data = df_twostage)
+
+
+summary(m_beta0)
+summary(m_beta1)
+
+```
+
+We can see that sex doesnt seem to explain any variance in BPRS, neither at baseline nor over time. Except for sex and education, all covariates explain initial differences between patients at the start of the trial.
+
+Education, BMI, WZC and sex do not explain much difference in the change over time of patients' BPRS. Job, ADL, Trial center and age are important.
+
+
+Remove objects not needed anymore
+```{r}
+rm(stage1_coefs, stage1_coefs_num, stage2_covars)
+```
+
+#### ADD: visualize the two-step model approach
+
+
+```{r}
+
+dfs_by_patid <- by(dat_long_cmpl, dat_long_cmpl$patid, identity)
+
+```
+
