@@ -1,0 +1,452 @@
+---
+title: "LDA"
+author: "Rafke Niemans"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+# Longitudinal Data Analysis 
+
+## Assignment 1: Introduction on Alzheimer data 
+
+A group of elderly patients, spread across 20 clinical centers, are being followed over time for Alzheimers
+disease. Some patients still live at home, while others live in nursing homes (WZC). Patients are included
+in the study upon first diagnosis of Alzheimers disease. Naturally, this occurs at different ages for different
+individuals.
+The longitudinal follow-up is based on four measurements. First, there are two cognitive scales (CDR-SB and
+BPRS); second, there are two possible biomarkers (ABPET and TAUPET). Each of these four variables is
+measured at baseline (upon inclusion, moment 0), and then annually over six years.
+In addition to these longitudinal measurements, several background and clinical parameters are recorded at
+baseline only. These include age (AGE), sex (SEX), education level (EDU), body mass index (BMI), whether
+the person has a paid job (JOB), activities of daily living (ADL), and whether they live in a nursing home
+(WZC).
+Note that not all participants remain in the study until the end. Baseline values are recorded for everyone, but
+from the first follow-up moment (year 1) onwards, some participants drop out and do not return to the study.
+The objective of the study is to investigate how BPRS changes over time, and how it relates to the patient
+characteristics at baseline as well as the baseline measurements of CDR-SB, ABPET, and TAUPET. 
+
+
+```{r libraries}
+library(knitr)
+library(haven)
+library(ggplot2)
+library(caret)
+library(tidyverse)
+library(tidyr)
+library(lme4)
+library(purrr)
+library(broom)
+library(nlme)
+
+```
+
+```{r load}
+data <- read_sas("alzheimer25.sas7bdat")
+str(data)
+colSums(is.na(data))
+```
+
+
+## Q1. Describe the data, and use graphical techniques to explore the mean structure, the variance structure
+and the correlation structure. Summarize your conclusions. What are the implications with respect to
+statistical modeling ?
+
+It's a repeated measures experiment, where four variables are being measured once annually for a duration of six years where 0 is the baseline, so from the baseline year up until the 6th year, yearly comparisons of measurements can be done. It is a balanced data set. Noticeable is that there are a lot of missing values in the measured variables as visible above. This is due to some patients not completing every experiment. This can form an implication to deal with when assessing what model suits best. Additionally, another possible implication could be the problem of multiple testing.
+
+```{r reshaping df}
+data_long <- data %>%
+  pivot_longer(
+    cols = matches("^(cdrsb|bprs|abpet|taupet)\\d+$"),
+    names_to = c(".value", "year"),                   
+    names_pattern = "([a-z]+)(\\d+)"                    
+  ) %>%
+  mutate(year = as.integer(year)) %>%
+  arrange(patid, year)
+```
+
+```{r basic plotting}
+ggplot(data_long, aes(x = year, y = bprs, group = patid)) +
+  geom_line(alpha = 0.2, color = "steelblue") +         # light individual trajectories
+  geom_smooth(aes(group = 1), color = "black", se = FALSE, linewidth = 1) +  # group mean trend # one facet per variable
+  labs(
+    title = "BPRS over six years",
+    x = "Year",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+```{r variable comparison}
+plot_df <- data_long %>%
+  pivot_longer(
+    cols = c(cdrsb, bprs, abpet, taupet),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(plot_df, aes(x = year, y = value, group = patid)) +
+  geom_line(alpha = 0.2, color = "steelblue") +         # light individual trajectories
+  geom_smooth(aes(group = 1), color = "black", se = FALSE, linewidth = 1) +  # group mean trend
+  facet_wrap(~ variable, scales = "free_y", ncol = 2) + # one facet per variable
+  labs(
+    title = "Patient progression over years",
+    x = "Year",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+```{r}
+between_corr <- plot_df %>%
+  pivot_wider(names_from = variable, values_from = value) %>%
+  group_by(year) %>%
+  summarise(
+    across(c(cdrsb, bprs, abpet, taupet),
+           list(mean = mean, sd = sd), na.rm = TRUE),
+  )
+
+# correlation per year
+corr_by_year <- plot_df %>%
+  pivot_wider(names_from = variable, values_from = value) %>%
+  group_split(year) %>%
+  lapply(~ cor(select(.x, cdrsb, bprs, abpet, taupet), use = "pairwise.complete.obs"))
+names(corr_by_year) <- paste0("Year_", 0:6)
+corr_by_year[1]  # e.g. correlation matrix for year 0
+
+```
+
+```{r}
+mean_var_summary <- plot_df %>%
+  group_by(variable, year) %>%
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    var_value  = var(value, na.rm = TRUE),
+    sd_value   = sd(value, na.rm = TRUE),
+    n          = sum(!is.na(value)),
+    se_value   = sd_value / sqrt(n),
+    .groups = "drop"
+  )
+
+ggplot(mean_var_summary, aes(x = year, y = mean_value)) +
+  geom_line(color = "firebrick", linewidth = 1.2) +
+  geom_point(color = "firebrick", size = 2) +
+  geom_ribbon(aes(ymin = mean_value - sd_value,
+                  ymax = mean_value + sd_value),
+              fill = "firebrick", alpha = 0.2) +
+  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Mean ± SD per variable across years",
+    x = "Year", y = "Mean ± SD"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+
+```{r}
+lm_results <- mean_var_summary %>%
+  group_by(variable) %>%
+  summarise(
+    var_trend = coef(lm(var_value ~ year))[2],
+    mean_trend = coef(lm(mean_value ~ year))[2]
+  )
+lm_results
+
+```
+From the plots and table above, variance is decreasing over time for especially BPRS, meaning the subjects/patients' data are becoming more similar when it comes to that variable.BPRS is also exhibiting linear growth over those six years. 
+
+## Q2.  What summary statistics are appropriate for the analysis of these data ? Why ? Do they yield the same
+results ? Summarize your conclusion
+
+If the dataset tracks values across time (year 0–6), it is useful to summarize change over time using:
+
+- Mean (or median) per year, this is already included in the plot shown above.
+
+- Repeated-measures statistics (e.g., paired t-test, ANOVA, mixed model)
+
+```{r summary statistics}
+# Paired t-tests baseline (0) vs final (6)
+t.test(data$cdrsb0, data$cdrsb6, paired = TRUE)
+t.test(data$bprs0,  data$bprs6,  paired = TRUE)
+t.test(data$abpet0, data$abpet6, paired = TRUE)
+t.test(data$taupet0,data$taupet6,paired = TRUE)
+
+```
+Among the four measures, BPRS shows by far the greatest change across time.
+
+This indicates that behavioral and psychiatric deterioration dominates the longitudinal trajectory, whereas cognitive decline (CDRSB) is more moderate, and biological markers (ABPET, TAUPET) show much smaller absolute shifts.
+
+All variables show statistically significant changes, but their effect sizes differ dramatically — emphasizing that statistical significance ≠ clinical importance.
+
+No they do **not** yield the same results — mean vs median or parametric vs nonparametric summaries don’t always agree:
+If data are symmetric then mean ≈ median so more or less the same conclusion.
+
+If data are skewed or have outliers then mean ≠ median and conclusion will have a higher chance to differ. 
+Similarly, categorical proportions tell a different story than averages of coded numbers.
+
+
+## Q3. Fit a multivariate model, and find the most parsimonious mean structure which can be used to describe
+the average evolutions in the data. What covariance structures are applicable in this case ? What is the
+most parsimonious structure you can find ?
+
+aiming for simplicity to enhance interpretation and advance theoretical development.
+
+Due to missing data in some years, the Unstructured Covariance structure is not the most suitable for the data. 
+
+```{r Q3}
+library(nlme)
+
+# Base model specification (fixed effects)
+form <- bprs ~ year + age + sex + edu + bmi + job + adl + wzc
+
+# ---- Model 2: Compound symmetry ----
+m2_CS <- lme(
+  fixed = form,
+  random = ~ 1 | patid,
+  correlation = corCompSymm(form = ~ year | patid),
+  data = data_long,
+  method = "REML",
+    na.action = na.exclude
+)
+
+# ---- Model 3: AR(1) ----
+m3_AR1 <- lme(
+  fixed = form,
+  random = ~ 1 | patid,
+  correlation = corAR1(form = ~ year | patid),
+  data = data_long,
+  method = "REML",
+    na.action = na.exclude
+)
+
+# ---- Model 4: Toeplitz (ARMA(6,0)) ----
+m4_TOEP <- lme(
+  fixed = form,
+  random = ~ 1 | patid,
+  correlation = corARMA(form = ~ year | patid, p = 6, q = 0),
+  data = data_long,
+  method = "REML",
+    na.action = na.exclude
+)
+
+control_lme <- lmeControl(
+  opt = "nlminb", 
+  msMaxIter = 200,       # max iterations of optimizer
+  msMaxEval = 400,       # total evaluations
+  returnObject = TRUE
+)
+
+# ---- Model 5: AR(1) + heterogeneous variances ----
+m5_AR1het <- lme(
+  fixed = form,
+  random = ~ 1 | patid,
+  correlation = corAR1(form = ~ year | patid),
+  weights = varIdent(form = ~ 1 | year),
+  data = data_long,
+  method = "REML",
+    na.action = na.exclude,
+  control = control_lme
+)
+
+```
+
+
+```{r model evaluation}
+AIC(m2_CS, m3_AR1, m4_TOEP, m5_AR1het)
+BIC(m2_CS, m3_AR1, m4_TOEP, m5_AR1het)
+
+anova(m2_CS, m3_AR1, m4_TOEP, m5_AR1het)
+```
+The AR(1) component captures the temporal correlation in repeated BPRS measures — i.e., scores from adjacent years are more similar than those several years apart.
+
+The heterogeneous variance (varIdent) allows different variability per year, which is realistic in your study since measurement noise and patient dropout tend to increase over time.
+
+The significant improvement in log-likelihood and lower AIC/BIC demonstrate that this flexibility meaningfully improves model fit without overfitting.
+
+This means that correlations between consecutive yearly measurements decay exponentially with time lag, while allowing variability to differ across years
+
+## Q4. Use an explicit two-stage analysis to get an initial impression about trends and the effect of covariates
+on those trends
+
+The 2-stage model analysis is as following:
+\item Stage 1: Linear regression model per separate subject (within-subject)
+\item Stage 2: Explain variability in the subject-specific regression coefficients using the covariates from stage 1 (between-subject)
+
+$$
+\mathbf{Y}_i = Z_i \boldsymbol{\beta}_i + \boldsymbol{\varepsilon}_i
+$$
+
+where
+
+$$
+Z_i =
+\begin{pmatrix}
+1 & t_{i0} \\
+1 & t_{i1} \\
+1 & t_{i2} \\
+1 & t_{i3} \\
+1 & t_{i4} \\
+1 & t_{i5} \\
+1 & t_{i6}
+\end{pmatrix},
+\quad
+\boldsymbol{\beta}_i =
+\begin{pmatrix}
+\beta_{1i} \\
+\beta_{2i}
+\end{pmatrix},
+\quad
+\boldsymbol{\varepsilon}_i =
+\begin{pmatrix}
+\varepsilon_{i0} \\
+\varepsilon_{i1} \\
+\varepsilon_{i2} \\
+\varepsilon_{i3} \\
+\varepsilon_{i4} \\
+\varepsilon_{i5} \\
+\varepsilon_{i6}
+\end{pmatrix}.
+$$
+
+$Y_{ij} = \beta_{1i} + \beta_{2i}t_{ij}+\epsilon_{ij}$,
+$Y_{ij} = \text{ln(BPRS}_{ij} +1)$
+$j= 0,\dots,6$,
+$t_{ij} = \text{year} \space \beta_{1i} \space \text{equals baseline BPRS for subject i henceforth where each patient starts}$
+$\beta_{2i} = \text{yearly change in BPRS for each subject, how each patient changes per year}$
+
+
+The cognitive scale BPRS has a linear increase, so it accelerates upward. The other variables do not follow this linear trend over the years.
+
+\textcolor{red}{WE NEED TO TRANSFORM THIS QUADRATICALLY??}
+
+When combining both models, it would result in a Linear Mixed-Effects Model: 
+$Y_i=X_i\beta+Z_ib+\epsilon_i$ where $\beta$ implies the fixed effects and $b_i$ takes into accounts random effects. 
+
+```{r stage 1}
+# Packages
+
+# ---- 0) Prep baseline variables and time ----
+# df columns assumed: patid, institute_id, year (0..6), 
+# bprs, cdrsb, abpet, taupet, sex, age, edu, bmi, job, adl, wzc
+
+# Baseline per subject (year 0)
+base <- data_long %>%
+  filter(year == 0) %>%
+  transmute(
+    patid, institute_id,
+    Age = age, Sex = sex, Edu = edu, BMI = bmi, Job = job, Income = inkomen,
+    ADL = adl, WZC = wzc,
+    CDR0 = cdrsb, ABPET0 = abpet, TAUPET0 = taupet
+  )
+
+# Add baseline + time to all rows
+dat <- data_long %>%
+  left_join(base, by = c("patid","institute_id")) %>%
+  mutate(t = year)  # keep 0..6 so beta1i = baseline BPRS
+
+# ---- 1) Stage 1: per-subject BPRS ~ t ----
+stage1 <- dat %>%
+  group_by(patid) %>%
+  filter(sum(!is.na(bprs)) >= 2) %>%         # need >= 2 points to estimate slope
+  nest() %>%
+  mutate(
+    fit = map(data, ~ lm(bprs ~ t, data = .x)),
+    cf  = map(fit, ~ tidy(.x) %>% select(term, estimate))
+  ) %>%
+  select(patid, cf) %>%
+  unnest(cf) %>%
+  mutate(term = recode(term, "(Intercept)" = "beta1", "t" = "beta2")) %>%
+  pivot_wider(names_from = term, values_from = estimate)
+
+# Attach baseline covariates (one row per patid)
+stage1 <- stage1 %>%
+  left_join(base %>% distinct(patid, .keep_all = TRUE), by = "patid") %>%
+  mutate(center = factor(institute_id))
+
+```
+Stage 1 isolates individual dynamics (slope/intercept per person).
+Stage 2 tests whether those dynamics differ systematically by covariates.
+
+```{r stage 2}
+m_beta1 <- lm(beta1 ~ Age + Sex + Edu + BMI + Job + ADL + Income + WZC + center, data = stage1)
+m_beta2 <- lm(beta2 ~ Age + Sex + Edu + BMI + Job + ADL + Income + WZC +
+                        CDR0 + ABPET0 + TAUPET0 + center, data = stage1)
+
+summary(m_beta1)
+summary(m_beta2)
+```
+What can be concluded from results regarding $\beta_{1i}$:
+At baseline, patients who are older, heavier, less functionally independent (high ADL), and living in nursing homes have higher behavioral symptom scores (BPRS). Being employed predicts substantially better functioning (lower BPRS).
+
+What can be concluded from results regarding $\beta_{2i}$: 
+\item{Age and poorer baseline functioning (ADL, WZC) are linked to faster behavioral deterioration over time.}
+\item{Having a job is protective as it indicates slower change.}
+\item{High initial CDRSB predicts a smaller annual change in BPRS, consistent with a plateau effect at high severity.}
+
+In both models, it seems like the variables sex, education and income do not have a signficant effect on BPRS or the development of BPRS over timne. 
+
+## Q5. Formulate a plausible random-effects model. Fit your model, and compare the results with those from
+the multivariate model.
+
+```{r}
+library(nlme)
+
+# Prepare
+df_long <- within(data_long, {
+  patid        <- factor(patid)
+  institute_id <- factor(institute_id)
+  year         <- as.numeric(year)            # 0..6
+})
+
+# Scaled covariates help convergence
+df_long$age_s <- scale(df_long$age)
+df_long$bmi_s <- scale(df_long$bmi)
+df_long$adl_s <- scale(df_long$adl)
+
+# Fixed effects: level + slope modifiers (adjust the set as you like)
+form_fixed <- bprs ~ year +
+  age_s + sex + edu + bmi_s + job + adl_s + wzc +
+  cdrsb0 + abpet0 + taupet0 +
+  year:(age_s + job + adl_s + wzc + cdrsb0)
+
+ctrl <- lmeControl(opt = "nlminb", msMaxIter = 200, msMaxEval = 400, returnObject = TRUE)
+
+# Full model: patient RI-RS + center RI; AR(1)+heterogeneous residuals
+m_full <- lme(
+  fixed = form_fixed,
+  random = list(
+    institute_id = pdDiag(~ 1),       # center random intercept
+    patid        = pdSymm(~ year)     # subject random intercept & slope (unstructured D)
+  ),
+  correlation = corAR1(form = ~ year | patid),
+  weights     = varIdent(form = ~ 1 | year),
+  data        = df_long,
+  method      = "REML",
+  na.action   = na.exclude,
+  control     = ctrl
+)
+summary(m_full)
+
+```
+
+
+Check the appropriateness of your random-effects model. Calculate the subject-
+specific intercepts/slopes and compare them to the ones you obtained from a two-stage analysis. What
+do you conclude?
+```{r}
+m_RI  <- update(m_full, random = list(institute_id = pdDiag(~1), patid = pdDiag(~ 1)),
+                method = "ML")
+m_RIRS <- update(m_full, random = list(institute_id = pdDiag(~1), patid = pdSymm(~ year)),
+                 method = "ML")
+anova(m_RI, m_RIRS)  # LRT; boundary -> p-value conservative; for exact use RLRsim::exactRLRT
+
+m_noCenter <- update(m_full, random = list(patid = pdSymm(~ year)), method = "ML")
+anova(m_noCenter, update(m_full, method = "ML"))
+
+```
+
