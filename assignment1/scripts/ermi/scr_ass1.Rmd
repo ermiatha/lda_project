@@ -9,24 +9,921 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+```{r}
+library(haven)
+library(tidyverse)
+library(patchwork)
+library(pROC)
+library(nlme)
+library(data.table)
+library(broom)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+setwd("./../../data")
+
+filename <- "alzheimer25.sas7bdat"
+
+dat <- read_sas(filename)
+dat_dt <- setDT(read_sas(filename))
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+summary(dat)
+attributes(dat)
+```
 
 
+# Data Preparation
+```{r reshape}
+
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat_long) {
+
+    dat_long <- dat_long %>%
+        mutate(
+            time = as.factor(time),  # coded 0-6
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+            time_num = as.numeric(time)  # coded 1-7
+        )
+    dat_long
+}
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+
+
+```
+
+# Q1: Data Exploration
+```{r}
+# continuous bl vars
+cont_bl_vars <- c("age", "bmi", "inkomen")
+
+
+lapply(cont_bl_vars, function(var) {
+    dat %>%
+        ggplot(
+            aes_string(x = var)) +
+        geom_histogram() +
+        ggtitle(var)
+                                    }
+    )
+
+
+
+
+```
+
+
+```{r, echo=FALSE}
+#setwd("C:/Users/Ermioni Athanasiadi/Documents/lda_project/assignment1/export/figures")
+
+
+# continuous longitudinal vars
+cont_ltd_vars <- c("bprs", "cdrsb", "abpet", "taupet")
+
+lapply(cont_ltd_vars, function(var) {
+        dat_long %>%
+            ggplot(
+                aes_string(y = var, x = "time")) +
+            geom_boxplot()
+                                    }
+            )
+
+```
+
+
+```{r}
+
+tab_timevars_by_cov <- function(dat_long, covar) {
+    tab <- dat_long %>%
+        # omit missing observations
+        na.omit() %>%
+        group_by(time, !!sym(covar)) %>%
+        summarise(mean_bprs = mean(bprs),
+                  mean_cdrsb = mean(cdrsb),
+                  mean_abpet = mean(abpet),
+                  mean_taupet = mean(taupet))
+    tab
+}
+
+plot_timevars_by_cov <- function(dat_long, tab, covar) {
+    ## covar
+    ## = character vector of covariates
+    ## tab
+    ## = summary table with time vars grouped by time and the covariate of interest
+    ## dat_long
+    ## = the df of interest in long format
+    
+
+    #print(tab)
+    
+    mean_ltd_vars <- paste0("mean_", c("bprs", "cdrsb", "abpet", "taupet"))
+    
+    lapply(mean_ltd_vars, function(var) {
+            tab %>%
+                ggplot(
+                    aes(x = time, y = !!sym(var), 
+                               colour = !!sym(covar), group = !!sym(covar))
+                ) +
+                geom_point() + geom_line() +
+            ggtitle(paste0(var, " by ", covar, " and time"))
+                                        })
+}
+
+covariates <- c("sex", "edu", "trial", "job", "wzc")
+
+plots_by_covar <- map(covariates, function(covar) 
+                         {
+                         tab <- tab_timevars_by_cov(dat_long, covar)
+                         plots <- plot_timevars_by_cov(dat_long, tab, covar)
+                         wrap_plots(plots, ncol = 2)
+                         }
+                         )
+print(plots_by_covar)
+
+```
+```{r}
+# look at continuous bl variables
+
+# 
+
+```
+
+```{r}
+# look at individual trajectories
+
+ltd_vars <- c("bprs", "cdrsb", "abpet", "taupet")
+
+
+
+set.seed(0101)
+rd_subset <- dat %>%
+            # na.omit() %>%
+            sample_n(., 30)
+
+
+rd_subset <- reshape_dat(rd_subset)
+
+rd_subset <- rd_subset %>%
+    mutate(
+        time = as.factor(time),
+        sex = as.factor(sex),
+        edu = as.factor(edu),
+        trial = as.factor(trial),
+        job = as.factor(job),
+        wzc = as.factor(wzc)
+    )
+
+
+
+map(ltd_vars, function(var) 
+    {
+     rd_subset %>%
+        na.omit() %>%
+        ggplot(aes(x = time, y = !!sym(var), group = patid)) +
+        geom_point() +
+        geom_line() +
+        facet_wrap(~sex, scales = "free")
+    }
+    )
+
+    
+# connect points of different time points per individual 
+```
+```{r}
+plot_ind_timevars_by_cov <- function(rd_subset, covar) {
+    ## covar
+    ## = character vector of covariates
+    ## rd_subset_long
+    ## = dat_long random subset of n=30 obs
+
+    map(ltd_vars, function(var) 
+    {
+     rd_subset %>%
+        na.omit() %>%
+        ggplot(aes(x = time, y = !!sym(var), group = patid)) +
+        facet_wrap(as.formula(paste("~", covar)), scales = "free") +
+        geom_point() +
+        geom_line()  +
+        ggtitle(paste0(var, " by ", covar, " and time"))
+    }
+    )
+    
+}
+
+covariates <- c("sex", "edu", "trial", "job", "wzc")
+
+#plots_ind_by_covar <- 
+map(covariates, function(covar) 
+                         {
+                         # plots <- 
+                         plot_ind_timevars_by_cov(rd_subset, covar)
+                         #wrap_plots(plots, ncol = 2)
+                         }
+                         )
+#print(plots_ind_by_covar)
+```
+
+Check out missings at timepoint 0...
+```{r}
+dat_long %>% filter(time == 0) %>% select(cdrsb, bprs, abpet, taupet) %>% nrow()
+dat_long %>% filter(time == 0) %>% select(cdrsb, bprs, abpet, taupet) %>% na.omit() %>% nrow()
+```
+Ok, we have no rows where the endpoints are missing at T0. Looks good.
+
+Continue with some summary measures to explore the data some more...
+```{r}
+map(covariates, function(covar) {
+    dat_long %>%
+        filter(time == 6) %>%
+        group_by(!!sym(covar)) %>%
+        summarise(
+            mean_cdrsb = mean(cdrsb, na.rm = T),
+            mean_bprs = mean(bprs, na.rm = T),
+            mean_abpet = mean(abpet, na.rm = T),
+            mean_taupet = mean(taupet, na.rm = T)
+        )})
+```
+
+
+```{r}
+summ <- dat_long %>%
+  group_by(time) %>%
+  summarise(
+    mean_bprs = mean(bprs, na.rm= T),
+    se_bprs = sd(bprs, na.rm = T)/sqrt(n()),
+    bprs_min = mean_bprs - se_bprs,
+    bprs_max = mean_bprs + se_bprs
+  )
+
+summ
+```
+
+
+Visualize mean BPRS scores by year
+```{r}
+summ %>%
+  ggplot(aes(x = as.numeric(time), y = mean_bprs)) +
+  geom_line(size = 0.7) +
+  geom_ribbon(aes(ymin = bprs_min, ymax = bprs_max),
+              alpha = 0.25) + 
+  #scale_x_continuous(breaks = seq()) +
+  scale_y_continuous(breaks = seq(70, 110, 10)) +
+  theme_minimal(base_family = "sans") +
+  labs(
+    x = "Time (Years)",
+    y = "BPRS score"
+  ) +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold")
+  )
+```
+This looks pretty linear. Standard errors not really increasing with time.
+
+# Q2: Summary statistics
+```{r}
+
+# AUC
+# AUC <- (t2 - t1)*(y1 + y2)/2 + (t3 - t2)*(y1 + y2) + ...
+
+# endpoints: take last endpoint per subject as "summary statistics" -> not appropriate here, because no randomization: observational study
+
+# increments
+dat <- dat %>%
+        group_by(patid) %>%
+        mutate(
+            cs_cdrsb = cdrsb6 - cdrsb0,
+            cs_bprs = bprs6 - bprs0,
+            cs_abpet = abpet6 - abpet0,
+            cs_taupet = taupet6 - taupet0
+        )
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+
+map(covariates, function(covar) {
+    dat_long %>%
+        group_by(!!sym(covar)) %>%
+        summarise(
+            cs_cdrsb = mean(cs_cdrsb, na.rm = T),
+            cs_bprs = mean(cs_bprs, na.rm = T),
+            cs_abpet = mean(cs_abpet, na.rm = T),
+            cs_taupet = mean(cs_taupet, na.rm = T)
+        )})
+
+# analysis of covariance
+
+# analysis at each time --> not appropriate for longitudinal data
+
+```
+Education:
+More differences become visible between different levels of education, if we look at the change scores compared to the last observation (time point 6). We suppose that this stems from the fact that we now incorporate baseline information per subjects.
+Selective dropout at timepoint 6 is probably not too relevant here, as it affects the two summary measures equally (missings are dropped). We have complete observations at timepoint, so no need to worry there.
+
+Job:
+For CDRSB, we observe group differences for the change scores, but no diffs when looking at the last time point. 
+Interestingly, group differences for BPRS at the last time point appear to exist but disappear when looking at the change scores.
+
+WZC:
+Group differences for BPRS disappear when looking at change scores. Similar values for CDRSB.
+
+The two protein vars show changes on a very small change only. Descriptively and without looking at the standard deviation, its hard to draw conclusions.
+
+
+
+# Q3: Multivariate Model
+
+
+Let's prepare our dataset for the use with nlme. We need complete observations per subject
+```{r}
+dat_long <- dat_long %>%
+  mutate(patid = as.factor(patid))
+
+dat_long_cmpl <- dat_long %>% select(patid, bprs, sex, time, age, trial,
+                                     edu, bmi, inkomen, job, adl, wzc, 
+                                     time_num,
+                                     cdrsb, taupet, abpet) %>% na.omit()
+
+dat_long_cmpl <- dat_long_cmpl %>%
+  arrange(patid, time)
+
+
+dat_long_cmpl2 <- dat_long_cmpl %>%
+  group_by(patid) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+```
+
+Let's have a look at the number of observations per subject:
+```{r}
+table(dat_long$patid) %>% table()
+table(dat_long_cmpl$patid) %>% table()
+table(dat_long_cmpl2$patid) %>% table()
+
+# do they add up?
+table(dat_long_cmpl$patid) %>% table() %>% sum()
+
+tab <- dat_long_cmpl %>% group_by(patid) %>% summarize(
+  patid = n()
+)
+
+tab
+
+
+```
+We have n = 1253 subjects in our dataset.
+
+When keeping only subjects with complete observations, we exclude n = 147 persons from our sample.
+
+We have > 1 observation for each subject in our dat_long_compl2. 
+
+```{r}
+m_full <- gls(
+  bprs ~ time + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb + abpet + taupet, # - 1: we could also remove the intercept: then no absolute, not relative to bl
+  #weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+
+m1 <- m_full
+
+m2 <- update(m1, . ~ . - inkomen)
+anova(m1, m2)  # exclude inkomen
+m1 <- m2
+
+m3 <- update(m1, . ~ . - bmi)
+anova(m1, m3)
+
+m4 <- update(m1, . ~ . - job)
+anova(m1, m4) 
+
+m5 <- update(m1, . ~ . - edu)
+anova(m1, m5)
+
+m6 <- update(m1, . ~ . - wzc)
+anova(m1, m6)
+
+m7 <- update(m1, . ~ . - adl)
+anova(m1, m7)
+
+m8 <- update(m1, . ~ . - trial)
+anova(m1, m8)
+
+m9 <- update(m1, . ~ . - taupet)
+anova(m1, m9)
+
+m10 <- update(m1, . ~ . - abpet)
+anova(m1, m10)
+
+m11 <- update(m1, . ~ . - sex)
+anova(m1, m11)
+
+m12 <- update(m1, . ~ . - age)
+anova(m1, m12)
+
+m13 <- update(m1, . ~ . - time)
+anova(m1, m13)
+
+rm(m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12)
+```
+
+The strongest Likelihood Ratios are obtained for time, age and trial. 
+We only exclude inkomen as predictor.
+
+Now lets see if some interactions are meaningful:
+```{r}
+
+m2 <- gls(
+  bprs ~ time * age + sex + trial + edu + bmi + job + adl + wzc + cdrsb + abpet + taupet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m2)
+
+m3 <- gls(
+  bprs ~ time * trial + age + sex + edu + bmi + job + adl + wzc + cdrsb + abpet + taupet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m3)
+
+m4 <- gls(
+  bprs ~ time * age  + trial + sex + edu + bmi + job + adl + wzc + cdrsb + abpet + taupet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m4)
+
+m5 <- gls(
+  bprs ~ time * sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet + taupet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m5)
+
+rm(m2, m3, m4, m5)
+
+```
+No interactions between time and other predictors seem plausible for our data.
+
+
+What about other interactions?
+```{r}
+m1_save <- m1
+
+m2 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m2)  # interaction between the biomarkers improves fit
+m1 <- m2
+
+m3 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb * abpet * taupet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m3) 
+
+m4 <- gls(
+  bprs ~ time + sex + age * cdrsb + trial + edu + bmi + job + adl + wzc + taupet * abpet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m1, m4) 
+
+m5 <- gls(
+  bprs ~ time + sex + age * cdrsb + trial + edu + bmi + job + adl + wzc + taupet + abpet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m5, m1_save) 
+
+m6 <- gls(
+  bprs ~ time + sex + age * adl + trial + edu + bmi + job + cdrsb + wzc + taupet + abpet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m6, m1_save) 
+
+m7 <- gls(
+  bprs ~ time + sex + age + adl + trial + edu * job + bmi + cdrsb + wzc + taupet * abpet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m7, m1) 
+
+rm(m2, m3, m4, m5, m6, m7)
+
+```
+
+Now lets see if we can detect some non-linear trends
+```{r}
+m1_save <- m1
+
+
+m2 <- gls(
+  bprs ~ time + I(time_num^2) + sex + age + adl + trial + edu + job + bmi + cdrsb + wzc + taupet * abpet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m2, m1) 
+
+```
+this does not work yet. 
+
+---------------------------------------------------------------------------------
+
+Our current model looks like this: 
+
+bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet
+
+
+We could also remove the intercept in the formula (- 1) -> then absolute, not relative to bl
+
+Lets continue with optimizing the variance structure.
+
+We started with uncorrelated errors by leaving corSymm() unspecified -> defaults to NULL
+
+Now what if we add weights to our variances to allow for heterogeneity?
+```{r}
+# with nlme package ###
+
+
+# 
+# (corresponding SAS argument would be type = VC)
+m2 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(m2)
+anova(m1, m2)
+
+m1 <- m2
+
+
+```
+
+Ok, so fitting different variances per year does improve our model fit. Lets stick with this model.
+
+
+Now lets look at the correlations:
+```{r}
+# continue with unstructured errors: every time point has own variance, 
+# and all year-pairs can have their own covariance 
+m2 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  correlation = corSymm(form = ~ 1 | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+# summary(m2)
+anova(m1, m2)  # allowing different correlations between errors is better
+getVarCov(m2)
+
+m1 <- m2
+
+
+# now add time as our ordering variable: treat time as numeric, to respect the ordering
+m3 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  correlation = corSymm(form = ~ as.numeric(time) | patid),   ###
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl2  # using only subset of data with > 1 obs per subject
+)
+summary(m3)
+#   AIC      BIC   logLik
+#   26463.21 26946.44 -13159.6
+# anova(m1, m3)
+getVarCov(m3)
+
+## compund symmetry
+m4 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  correlation = corCompSymm(form = ~ time_num | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+
+anova(m1, m4)  # allowing different correlations between errors is better
+getVarCov(m4)
+m1_save <- m1
+m1 <- m4
+
+## autoregressive: decreasing correlations with increasing time lag, stronger ones for adjancent lags
+m5 <- gls(
+  bprs ~ time + sex + age  + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  correlation = corAR1(form = ~ time_num | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+
+anova(m1, m5)  # we can't compare the models anymore due to same nr of df's
+getVarCov(m5)
+
+
+m1 <- m5  # autoregressive model
+
+```
+
+Model 2 with correlated (unstructured) errors improves fit -> We keep the model.
+
+Model 3 imposes an ordering of the correlations based on the time variable -> We can't compare it to the other model anymore because with time as numeric, it uses different number of observations.
+
+Conceptually, the syntax of Model 3 but with time as factor should be equivalent to Model 2 as our time variable is ordered.
+
+Model 4 imposes compound symmetry. 
+
+Model 5 introduces autoregressive correlation structure. It improves model fit, so we keep it. Probably mainly due to the more parsimonious structure.
+
+We can't compare Model 5 and 4 directly, so we have to find out yet which covariance structure is the best.
+
+
+
+```{r}
+### visualize the variances to find out
+```
+
+
+
+  
+  
+---------------------------------------------------------------------------------
+We try some stuff out, using only age as a predictor. 
+Lets do it as asked in the assignment and predict the BPRS score (which is a psychiatric score). It would make more sense, of course, to predict the dementia score with the psychiatric condition and not the other way round. 
+
+In this multivariate model, we will estimate the following predictors:
+
+$Y_{i1} = beta_{0,0}(1-x_i) + \beta_{1,0}x_i + \epsilon_{i1} $
+$Y_{i2} = beta_{0,1}(1-x_i) + \beta_{1,1}x_i + \epsilon_{i2} $
+$Y_{i3} = beta_{0,2}(1-x_i) + \beta_{1,2}x_i + \epsilon_{i3} $
+$Y_{i4} = beta_{0,3}(1-x_i) + \beta_{1,3}x_i + \epsilon_{i4} $
+$Y_{i5} = beta_{0,4}(1-x_i) + \beta_{1,4}x_i + \epsilon_{i5} $
+$Y_{i6} = beta_{0,5}(1-x_i) + \beta_{1,5}x_i + \epsilon_{i6} $
+$Y_{i7} = beta_{0,6}(1-x_i) + \beta_{1,6}x_i + \epsilon_{i7} $
+
+Although we name the time predictors starting with baseline measurement 0, let's keep the 1-based indexing for the model.
+```{r}
+# with nlme package ###
+
+# start with uncorrelated errors
+# (corresponding SAS argument would be type = VC)
+bprs_mod0 <- gls(
+  bprs ~ time + age, # - 1: we could also remove the intercept: then no absolute, not relative to bl
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(bprs_mod0)
+
+# continue with unstructured errors: every time point has own variance, 
+# and all year-pairs can have their own covariance 
+bprs_mod1 <- gls(
+  bprs ~ time + age,  # remove intercept, so absolute, not relative to bl
+  correlation = corSymm(form = ~ 1 | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(bprs_mod1)
+getVarCov(bprs_mod1)
+
+# now with interaction of time and age
+bprs_mod2 <- gls(
+  bprs ~ time * age,  
+  correlation = corSymm(form = ~ 1 | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(bprs_mod2)
+getVarCov(bprs_mod2)
+
+
+# now add time as our ordering variable: treat time as numeric, to respect the ordering
+bprs_mod3 <- gls(
+  bprs ~ time + age,  
+  correlation = corSymm(form = ~ as.numeric(time) | patid),   # order the 
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl2  # using only subset of data with > 1 obs per subject
+)
+summary(bprs_mod3)
+getVarCov(bprs_mod3)
+
+
+```
+We wanted to fit a model for our endpoint measured at 7 time points and fit the model with sex as predictor. That should give us 14 beta coefficients -> correct
+
+Model 3:
+The question is whether ordered factors would be more appropriate here than a numeric time variable. A factor cannot be handled for model estimation, though. 
+
+
+Let's have a closer look at the variances and correlations of our models:
+```{r}
+weights <- coef(bprs_mod2$modelStruct$varStruct)
+summary(bprs_mod2)$sigma * weights
+
+weights <- coef(bprs_mod3$modelStruct$varStruct)
+summary(bprs_mod3)$sigma * weights
+
+```
+
+
+Now what if we fit without an intercept?
+```{r}
+bprs_mod0noint <- gls(
+    bprs ~ time + age - 1,  # remove intercept, so absolute, not relative to bl
+    method = "ML",
+    data = dat_long_cmpl
+)
+summary(bprs_mod0)
+
+sum_bprs_mod0noint <- summary(bprs_mod0noint)
+
+sum_bprs_mod0noint$corBeta
+sum_bprs_mod0noint$corBeta
+
+rm(bprs_mod0, bprs_mod1, bprs_mod2, bprs_mod3, bprs_mod0noint, sum_bprs_mod0noint)
+```
+All correlations get "eaten up" by the intercept, if we fit one. It represents the predicted value of our outcome (BPRS score) when all predictors are set to 0.
+While a time = 0 makes sense here, the variable age is not that meaningful at age = 0. 
+We could center age to make it interpretable: Then, the intercept would indicate the predicted outcome at the mean age of our sample at year 0 (baseline).
+
+
+
+
+# Q4: Two-stage analysis
+
+We will build a model in two stages:
+
+Stage 1: Separate linear regression model for each subject --> we predict the outcome of interest
+Stage 2: Model for the different subject-specific coefficients --> we predict the coefficients
+
+Since we have several coefficients in each subject-model, we will have to model each of these coefficient vectors for each subject
+
+
+Time is the predictor for our stage 1 model.
+
+Stage 2 predictors: 
+
+- sex
+- age
+- trial
+
+- edu
+- job 
+- adl 
+- wzc
+
+- bmi
+- cdrsb 
+- abpet 
+- taupet
+
+However, if understood correctly, a two-stage analysis for n subejcts would require n regression models in stage 1.
+This corresponds to n = 1253 models, or n = 1106 if we exclude subjects with only 1 observation for the outcome of interest.
+
+We know from the lectures that two-stage modeling will yield an acceptable marginal model if most of the variance is found between subjects.
+
+
+```{r}
+# only subjects with > 1 obs
+stage1_coefs <- dat_long_cmpl2 %>%
+  select(patid, time, bprs) %>%
+  group_by(patid) %>%
+  summarise(patid = first(patid),
+            #model = lm(bprs ~ time, data = .),
+            beta0 = coef(lm(bprs ~ time))[1],
+            beta1 = coef(lm(bprs ~ time))[2],
+            beta2 = coef(lm(bprs ~ time))[3],
+            beta3 = coef(lm(bprs ~ time))[4],
+            beta4 = coef(lm(bprs ~ time))[5],
+            beta5 = coef(lm(bprs ~ time))[6]
+            )
+
+# also with n = 147 subjects with 1 obs -> but respective betas are NA
+stage1_coefs_num <- dat_long_cmpl %>%
+  select(patid, time_num, bprs) %>%
+  group_by(patid) %>%
+  summarise(patid = first(patid),
+            #model = lm(bprs ~ time, data = .),
+            beta0 = coef(lm(bprs ~ time_num))[1],
+            beta1 = coef(lm(bprs ~ time_num))[2]
+            )
+```
+
+
+Stage 2 Model:
+```{r}
+stage2_covars <- dat_long_cmpl %>% distinct(patid, age, sex, trial, edu, bmi, job, adl, wzc)  # , cdrsb, abpet, taupet
+
+```
+
+If we want to include time-varying predictors like the biomarkers or cognitive ratings, how to obtain a distinct set of covariates per subject? It will have more than 1 row.
+
+
+```{r}
+df_twostage <- left_join(stage1_coefs, stage2_covars, by = "patid")
+
+m_beta0 <- lm(beta0 ~ age + sex + trial + edu + bmi + job + adl + wzc, data = df_twostage)
+
+m_beta1 <- lm(beta1 ~ age + sex + trial + edu + bmi + job + adl + wzc, data = df_twostage)
+
+
+summary(m_beta0)
+summary(m_beta1)
+
+```
+
+We can see that sex doesnt seem to explain any variance in BPRS, neither at baseline nor over time. Except for sex and education, all covariates explain initial differences between patients at the start of the trial.
+
+Education, BMI, WZC and sex do not explain much difference in the change over time of patients' BPRS. Job, ADL, Trial center and age are important.
+
+
+Remove objects not needed anymore
+```{r}
+rm(stage1_coefs, stage1_coefs_num, stage2_covars)
+```
+
+#### ADD: visualize the two-step model approach
+
+
+```{r}
+
+dfs_by_patid <- by(dat_long_cmpl, dat_long_cmpl$patid, identity)
+
+```
+
+
+# Q5: Random effects model
+
+Our random effects model should consist of the following components:
+
+*Random effects:*
+We have observations per time unit nested in individuals nested in trial centers 
+
+*Fixed effects:*
+all time-invariant prognostic variables:
+aeg, sex, edu, bmi, job, adl, wzc
+
+all time-varying prognostic variables:
+cdrsb, taupet, abpet
+
+
+
+
+```{r}
+########
+
+m0 <- lme(
+  fixed =  bprs ~ time + sex + age + trial + edu + bmi + job + adl + wzc + cdrsb + abpet * taupet, 
+  random = ~ 1 | patid/trial,
+  correlation = corCompSymm(form = ~ 1 | patid/trial),
+  weights = varIdent(form = ~ 1 | time_num),
+  data = dat_long_cmpl,
+  method = "ML"
+)
+
+
+```
+
+Now lets look at our random effects:
+```{r}
+
+```
+
+
+Let's look at the coefficient estimates in the RE model compared to the 2-Stage Model.
+```{r}
+
+
+
+```
