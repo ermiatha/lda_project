@@ -9,7 +9,7 @@ output: pdf_document
 ```{r setup, include=FALSE}
 libraries <- c(
   "haven", "dplyr", "tidyr", "ggplot2", "reshape2",
-  "viridis", "knitr", "kableExtra", "nlme"
+  "viridis", "knitr", "kableExtra", "nlme", "lmerTest"
 )
 # Install missing packages
 for (pkg in libraries) {
@@ -52,8 +52,8 @@ to_factor <- function(dat_long) {
 }
 dat_long <- reshape_dat(dat)
 dat_long <- to_factor(dat_long)
-dat_long <- dat_long %>%
-  mutate(year_num = as.numeric(as.character(trial)))
+# dat_long <- dat_long %>%
+#   mutate(time_num = as.numeric(as.character(trial))) from Matteo: this doesn't work, I changed all the models to use time_num
 ```
 
 ## Q5. 
@@ -61,15 +61,22 @@ dat_long <- dat_long %>%
 Formulate a plausible random-effects model. Fit your model, and compare the results with those from the multivariate model. 
 
 
+Choose the Random-Effects Structure
+We use AIC and BIC instead than a LRT because of the boundary issue 
 ```{r}
-m1 <- lm(bprs ~ year_num * (sex + age + wzc + adl + job), data = dat_long) 
-m2 <- lmer(bprs ~ year_num * (sex + age + wzc + adl + job) + (1 | patid), data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
-m3 <- lmer(bprs ~ year_num * (sex + age + wzc + adl + job) + (year_num | patid), data = dat_long, REML = TRUE) # model with random intercept and slope
+m1 <- lm(bprs ~ time_num * (sex + age + wzc + adl + job), data = dat_long) 
+m2 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (1 | patid), data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
+m3 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (time_num | patid), data = dat_long, REML = TRUE) # model with random intercept and slope for patid
 
+m4 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (1 | trial/patid), data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
+m5 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (time_num | trial/patid), data = dat_long, REML = TRUE) # model with random intercept and slope for
+# patid and trial
+
+summary(m5)
 results <- data.frame(
-  Model = c("m1", "m2", "m3"),
-  AIC = AIC(m1, m2, m3),
-  BIC = BIC(m1, m2, m3)
+  Model = c("m1", "m2", "m3", "m4", "m5"),
+  AIC = AIC(m1, m2, m3, m4, m5),
+  BIC = BIC(m1, m2, m3, m4, m5)
 )
 
 
@@ -77,7 +84,135 @@ print(results)
 
 ```
 
-We proceed with the random-effects structure of model m3 
+We proceed with the random-effects structure of model m5
+Now we check the residual correlation structure
+```{r}
+
+# maximal fixed-effects formula
+formula_fe <- bprs ~ time_num * (sex + age + wzc + adl + job)
+
+# Model 1: Random intercept and slope, NO residual correlation
+model_no_corr <- lme(
+  fixed = formula_fe,
+  data = dat_long,
+  random = ~ time_num | trial/patid, 
+  method = "REML",
+  na.action = na.omit 
+)
+
+###  Calculate residual correlation matrix 
+residuals_df <- data.frame(
+  patid = model_no_corr$groups$patid,
+  trial = model_no_corr$groups$trial,
+  time_num = dat_long$time_num[as.numeric(rownames(model_no_corr$groups))],
+  residual = residuals(model_no_corr, type = "normalized") # Use normalized residuals
+)
+
+residuals_wide <- residuals_df %>%
+  pivot_wider(
+    id_cols = patid,
+    names_from = time_num,
+    values_from = residual,
+    names_prefix = "Year_"
+  )
+
+# Select only the columns containing residuals
+residual_columns <- residuals_wide %>%
+  select(starts_with("Year_"))
+
+# Calculate the matrix
+correlation_matrix <- cor(residual_columns, use = "pairwise.complete.obs")
+
+melted <- melt(correlation_matrix)
+
+ggplot(melted, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile(color = "white", linewidth = 0.4) +  # thin white grid lines
+  scale_fill_gradient2(
+    low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation (-1 : 1)"
+  ) +
+  coord_fixed() + 
+  labs(
+    title = "Correlation Heatmap ",
+    subtitle ="Correlation of the within-subject residuals",
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+    axis.text.y = element_text(size = 11, face = "bold"),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5, color = "gray30"),
+    panel.grid = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+
+```
+The residual correlation matrix seems to suggest very little correlation between the residuals. We might try to fit models with Compound Symmetry and AR(1) structures and compare them to the model that assumes independence. 
+
+```{r}
+# Model 2: Compound Symmetry residual correlation
+model_compsymm <- lme(
+  fixed = formula_fe,
+  data = dat_long,
+  random = ~ time_num | trial/patid,
+  # The form only specifies the grouping, as correlation is constant over time
+  correlation = corCompSymm(form = ~ 1 | trial/patid),
+  method = "REML",
+  na.action = na.omit 
+)
+
+# This comparison will now work
+anova(model_no_corr, model_compsymm)
+
+
+# Model 3: AR(1) residual correlation
+
+model_ar1 <- lme(
+  fixed = formula_fe,
+  data = dat_long,
+  random = ~ time_num | trial/patid,
+  correlation = corAR1(form = ~ time_num | trial/patid),
+  method = "REML",
+  na.action = na.omit 
+)
+
+anova(model_no_corr, model_ar1)
+```
+
+It appears that we can't reject the null hypothesis of independent residuals
+
+Now we choose the mean structure
+```{r}
+# Refit m5 using ML instead of REML
+
+m5 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (time_num | trial/patid), data = dat_long, REML = FALSE)
+summary(m5)
+
+m6 <- lmer(bprs ~ time_num * (age + adl + job + wzc) + sex + (time_num | trial/patid), data = dat_long, REML = FALSE)
+summary(m6)
+
+anova(m5, m6)
+
+m7 <- lmer(bprs ~ time_num * (age + adl + job) + sex + wzc + (time_num | trial/patid), data = dat_long, REML = FALSE)
+summary(m7)
+
+anova(m6,m7)
+
+
+m7_REML <- lmer(bprs ~ time_num * (age + adl + job) + sex + wzc + (time_num | trial/patid), data = dat_long, REML = TRUE)
+summary(m7_REML)
+
+
+```
+It appears like we can't reduce the mean structure any longer, so I would choose model 7_REML as the final linear mixed model. 
+
+
+
 
 
 ```{r lmm}
@@ -86,9 +221,9 @@ dat_long$age_s <- scale(dat_long$age)
 dat_long$bmi_s <- scale(dat_long$bmi)
 dat_long$adl_s <- scale(dat_long$adl)
 dat_long <- dat_long %>%
-  mutate(year_num = as.numeric(as.character(trial)))
+  mutate(time_num = as.numeric(as.character(trial)))
 
-form_fixed <- bprs ~ year_num +
+form_fixed <- bprs ~ time_num +
   age_s + sex + edu + bmi_s + job + adl_s + wzc +
   cdrsb + abpet + taupet 
 
@@ -98,7 +233,7 @@ ctrl <- lmeControl(opt = "nlminb", msMaxIter = 500, msMaxEval = 800, returnObjec
 m_no_corr <- lme(
   fixed = form_fixed,
   data = dat_long,
-  random = ~ year_num | patid, 
+  random = ~ time_num | patid, 
   method = "REML",
   na.action = na.omit 
 )
@@ -107,7 +242,7 @@ m_no_corr <- lme(
 m_compsymm<- lme(
   fixed = form_fixed,
   random = ~1 | patid,
-  correlation = corCompSymm(form = ~as.numeric(year_num) | patid),
+  correlation = corCompSymm(form = ~as.numeric(time_num) | patid),
   data = dat_long,
   method = "REML",
   na.action = na.omit,
@@ -116,15 +251,15 @@ m_compsymm<- lme(
 
 dat_long_unique <- dat_long %>%
   group_by(patid) %>%
-  filter(n_distinct(year_num) > 1) %>%
+  filter(n_distinct(time_num) > 1) %>%
   ungroup()
 
 # Model 3: Same random effects, but WITH AR(1) residual correlation
 m_ar1 <- lme(
   fixed = form_fixed,
   data = dat_long_unique,
-  random = ~ year_num | patid,
-  correlation = corAR1(form = ~ year_num | patid),
+  random = ~ time_num | patid,
+  correlation = corAR1(form = ~ time_num | patid),
   method = "REML",
   na.action = na.omit,
   control = ctrl
