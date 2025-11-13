@@ -550,13 +550,15 @@ preliminary_ols_model <- lm(bprs ~ time_num + sex + age + wzc + adl,
 
 # The residuals represent the part of the BPRS score that is NOT explained by the average trend.
 # In theory, this is what's left over for the random effects and residual error to explain.
-df_long$ols_residuals <- residuals(preliminary_ols_model)
+
+dat_long$ols_residuals = residuals(preliminary_ols_model)
+
 
 # If the random effects were just a random intercept (b_0i), these profiles should be flat but
 # shifted up or down for each patient, with random noise.
 # If there is a random slope (b_1i), we would expect to see individual slopes in these residual profiles.
 
-ggplot(df_long, aes(x = year_numeric, y = ols_residuals, group = patid)) +
+ggplot(dat_long, aes(x = time_num, y = ols_residuals, group = patid)) +
   geom_line(alpha = 0.3) + 
   geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
   labs(title = "OLS Residual Profiles for Each Patient",
