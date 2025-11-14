@@ -213,6 +213,24 @@ The recommendation for unbalanced data is to fit multivariate models only under 
 -> compound symmetry is valid but based on strong assumptions
 
 ###### Model selection 
+
+```{r}
+form_full = bprs ~ time.num + age # + sex # #trial + edu + bmi + inkomen + job + adl + wzc +# cdrsb.0 + abpet.0 #+ taupet.0 
+
+m_full <- lme(
+  fixed = form_full, # - 1: we could also remove the intercept: then no absolute, not relative to bl
+  random = ~ 1 | patid,
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  correlation = corSymm(form = ~ 1 | patid),
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+
+
+```
+
+
 ```{r}
 m_full <- gls(
   bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb + abpet + taupet, # - 1: we could also remove the intercept: then no absolute, not relative to bl
