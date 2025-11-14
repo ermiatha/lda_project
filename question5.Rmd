@@ -31,31 +31,35 @@ dat <- read_sas("alzheimer25.sas7bdat")
 reshape_dat <- function(dat) {
     dat_long <- dat %>%
         pivot_longer(
-            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            cols = matches("^bprs\\d+"),           # ⬅ ONLY bprs0, bprs1, ..., bprs6
             names_to = c(".value", "time"),
             names_pattern = "(.+)(\\d+)"
         )
+
     dat_long
 }
+
 
 to_factor <- function(dat_long) {
 
     dat_long <- dat_long %>%
         mutate(
-            time = as.factor(time),  # coded 0-6
+            time = as.factor(time),  # coded 0–6, still fine
             sex = as.factor(sex),
             edu = as.factor(edu),
             trial = as.factor(trial),
             job = as.factor(job),
             wzc = as.factor(wzc),
-            time_num = as.numeric(time)  # coded 1-7
+            time_num = as.numeric(time)  # coded 1–7
         )
     dat_long
 }
+
+
 dat_long <- reshape_dat(dat)
 dat_long <- to_factor(dat_long)
-# dat_long <- dat_long %>%
-#   mutate(time_num = as.numeric(as.character(trial))) from Matteo: this doesn't work, I changed all the models to use time_num
+
+
 ```
 
 ## Q5. 
@@ -66,12 +70,20 @@ Formulate a plausible random-effects model. Fit your model, and compare the resu
 Choose the Random-Effects Structure
 We use AIC and BIC instead than a LRT because of the boundary issue 
 ```{r}
-m1 <- lm(bprs ~ time_num * (sex + age + wzc + adl + job), data = dat_long) 
-m2 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (1 | patid), data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
-m3 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (time_num | patid), data = dat_long, REML = TRUE) # model with random intercept and slope for patid
+m1 <- lm(bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0, data = dat_long)
 
-m4 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (1 | trial/patid), data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
-m5 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (time_num | trial/patid), data = dat_long, REML = TRUE) # model with random intercept and slope for
+summary(m1)
+m2 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0 + (1 | patid),
+           data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
+
+m3 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0 + (time_num | patid),
+           data = dat_long, REML = TRUE) # model with random intercept and slope for patid
+
+m4 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0 + (1 | trial/patid),
+           data = dat_long, REML = TRUE) # Is var(slope) and cor(slope,intercept) = 0? 
+
+m5 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0 + (time_num | trial/patid), 
+           data = dat_long, REML = TRUE) # model with random intercept and slope for
 # patid and trial
 
 summary(m5)
@@ -91,7 +103,7 @@ Now we check the residual correlation structure
 ```{r}
 
 # maximal fixed-effects formula
-formula_fe <- bprs ~ time_num * (sex + age + wzc + adl + job)
+formula_fe <- bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0
 
 # Model 1: Random intercept and slope, NO residual correlation
 model_no_corr <- lme(
@@ -192,17 +204,20 @@ Now we choose the mean structure
 ```{r}
 # Refit m5 using ML instead of REML
 
-m5 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + (time_num | trial/patid), data = dat_long, REML = FALSE)
+m5 <- lmer(bprs ~ time_num * (sex + age + wzc + adl + job) + taupet0 + abpet0 + cdrsb0 + (time_num | trial/patid),
+           data = dat_long, REML = FALSE)
 summary(m5)
 
-m6 <- lmer(bprs ~ time_num * (age + adl + job + wzc) + sex + (time_num | trial/patid), data = dat_long, REML = FALSE)
+m6 <- lmer(bprs ~ time_num * (age + adl + job + wzc) + sex  + taupet0 + abpet0 + cdrsb0 + (time_num | trial/patid)
+           ,data = dat_long, REML = FALSE)
 summary(m6)
 
 anova(m5, m6)
 
-m7 <- lmer(bprs ~ time_num * (age + adl + job) + sex + wzc + (time_num | trial/patid), data = dat_long, REML = FALSE)
+m7 <- lmer(bprs ~ time_num * (age + adl + job) + sex + wzc + taupet0 + abpet0 + cdrsb0 + (time_num | trial/patid), data = dat_long, REML = FALSE)
 summary(m7)
 
+anova(m5,m7)
 anova(m6,m7)
 
 
