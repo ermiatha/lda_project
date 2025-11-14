@@ -234,7 +234,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = sex)) +
   scale_color_manual(values = c("#4575b4", "#d73027")) +
   theme_minimal() + 
   labs(
-    title = 'Individual BPRS Score as Function of Time and Sex',
+    title = 'Individual BPRS Score by Time and Sex',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -246,7 +246,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = sex, group = patid)) +
   scale_color_manual(values = c("#4575b4", "#d73027")) +
   theme_minimal() + 
   labs(
-    title = 'Individual BPRS Score Profiles Over Time by Sex',
+    title = 'Individual BPRS Score Profiles by Time and Sex',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -258,7 +258,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = sex, group = sex)) +
   scale_color_manual(values = c("#4575b4", "#d73027")) +
   theme_minimal() + 
   labs(
-    title = 'Average BPRS Score as Function of Time and Sex',
+    title = 'Average BPRS Score by Time and Sex',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -316,7 +316,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = age)) +
   scale_color_viridis_c(name = "Age") +
   theme_minimal() + 
   labs(
-    title = 'BPRS Score as Function of Time and Age',
+    title = 'Individual BPRS Scores by Time and Age',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -338,7 +338,7 @@ ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = age)) +
   scale_color_viridis_c(name = "Age") +
   theme_minimal() +
   labs(
-    title = "Individual BPRS Trajectories (Sample of 400 Patients)",
+    title = "Individual BPRS Profiles by Time and Age (Sample of 150 Patients)",
     x = "Year",
     y = "BPRS Score"
   )
@@ -366,7 +366,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = wzc)) +
   scale_color_manual(values = c("#4575b4", "#d73027")) +
   theme_minimal() + 
   labs(
-    title = 'BPRS Score as Function of Time and WZC',
+    title = 'Individual BPRS Scores by Time and WZC',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -389,7 +389,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = wzc, group = patid)) +
   scale_color_manual(values = c("#4575b4", "#d73027")) +
   theme_minimal() + 
   labs(
-    title = 'Individual BPRS Score Profiles Over Time by Sex',
+    title = 'Individual BPRS Profiles by Time by Sex',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -401,7 +401,7 @@ ggplot(dat_long, aes(x = time, y = bprs, color = wzc, group = wzc)) +
   scale_color_manual(values = c("#4575b4", "#d73027")) +
   theme_minimal() + 
   labs(
-    title = 'Average BPRS Score as Function of Time and WZC',
+    title = 'Average BPRS Score by Time and WZC',
     x = 'Year',
     y = 'BPRS Score'
   )
@@ -427,8 +427,36 @@ dropouts_wzc %>%
 ```
 
 
-## EDA by job, adl and trial
+## EDA by trial
 ```{r}
+
+# Individuals points 
+ggplot(dat_long, aes(x = time, y = bprs, color = as.factor(trial))) + 
+  geom_jitter(alpha = 0.6) +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$trial))),
+    name = "Trial"
+  ) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores as by Time and Trial',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+# Individual trajectories
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = as.factor(trial))) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$trial))),
+    name = "Trial"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and Trial (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
 
 
 ggplot(dat, aes(x = as.factor(trial), y = age, fill = as.factor(trial))) +
@@ -444,23 +472,159 @@ ggplot(dat, aes(x = as.factor(trial), y = age, fill = as.factor(trial))) +
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
 
-ggplot(dat, aes(x = as.factor(job), y = age, fill = as.factor(job))) +
-  geom_boxplot(alpha = 0.6, color = "black") +
-  scale_fill_manual(values = c("#4575b4", "#d73027")) +
-  theme_minimal(base_size = 14) +
-  labs(title = "Age by Job", x = "Job", y = "Age") +
-  theme(legend.position = "none")
 
-ggplot(dat, aes(x = adl, y = age)) +
-  geom_point(alpha = 0.6, color = "#4575b4") +
-  geom_smooth(method = "lm", se = TRUE, color = "#d73027", linewidth = 1) +
+
+
+```
+
+
+## EDA by job
+```{r}
+ggplot(dat_long, aes(x = time, y = bprs, color = as.factor(job))) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$job))),
+    name = "Job"
+  ) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and Job',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = as.factor(job))) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$job))),
+    name = "Job"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and Job (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+ggplot(dat, aes(x = as.factor(job), y = age, fill = as.factor(job))) +
+  geom_boxplot(alpha = 0.7, color = "black") +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$job))),
+    name = "Job"
+  ) +
   theme_minimal(base_size = 14) +
   labs(
-    title = "Age at baseline as a Function of ADL",
-    x = "ADL",
+    title = "Age at Baseline by Job",
+    x = "Job",
     y = "Age"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
   )
+
 ```
+
+
+## EDA by Adl
+```{r}
+ggplot(dat_long, aes(x = time, y = bprs, color = as.factor(adl))) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$adl))),
+    name = "ADL"
+  ) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and ADL',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = as.factor(adl))) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$adl))),
+    name = "ADL"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and ADL (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+ggplot(dat, aes(x = as.factor(adl), y = age, fill = as.factor(adl))) +
+  geom_boxplot(alpha = 0.7, color = "black", outlier.size = 0.8) +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$adl))),
+    name = "ADL"
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Age at Baseline by ADL",
+    x = "ADL Category",
+    y = "Age"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+
+```
+## EDA by BMI 
+```{r}
+ggplot(dat_long, aes(x = time, y = bprs, color = bmi)) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_viridis_c(name = "BMI") +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and BMI',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = bmi)) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_viridis_c(name = "BMI") +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and BMI (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+dat <- dat %>%
+  mutate(age_bin = cut(
+    age,
+    breaks = c(-Inf, 60,70, 80, Inf),
+    labels = c("<60", "60-70", "70-80", "80+"),
+    right = FALSE
+  ))
+
+
+ggplot(dat, aes(x = age_bin, y = bmi, fill = age_bin)) +
+  geom_boxplot(alpha = 0.7, color = "black") +
+  scale_fill_manual(values = c("#b3cde0", "#005b96", "#03396c","#011f4b")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "BMI at Baseline by Age Group",
+    x = "Age Group",
+    y = "BMI"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+
+
 ## Overall dropout rate
 
 ```{r}
