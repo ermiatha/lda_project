@@ -1,0 +1,755 @@
+---
+title: "question_1"
+author: "Matteo Venturini"
+date: "2025-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Conclusions at the bottom of the page 
+
+
+```{r}
+# List of required packages
+libraries <- c(
+  "haven", "dplyr", "tidyr", "ggplot2", "reshape2",
+  "viridis", "knitr", "kableExtra"
+)
+
+# Install missing packages
+for (pkg in libraries) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Load all packages
+invisible(lapply(libraries, library, character.only = TRUE))
+
+```
+
+
+```{r}
+dat <- read_sas("alzheimer25.sas7bdat")
+str(dat)
+colSums(is.na(dat))
+```
+
+# Data Preparation
+```{r reshape}
+
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat_long) {
+
+    dat_long <- dat_long %>%
+        mutate(
+            time = as.factor(time),  # coded 0-6
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+            time_num = as.numeric(time)  # coded 1-7
+        )
+    dat_long
+}
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+
+
+```
+
+
+# EDA
+
+## Mean and SD of clinical variables as a function of time
+```{r}
+plot_df <- dat_long %>%
+  pivot_longer(
+    cols = c(bprs, cdrsb, abpet, taupet),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  rename(year = time_num) 
+
+
+mean_var_summary <- plot_df %>%
+  group_by(variable, year) %>%
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    var_value  = var(value, na.rm = TRUE),
+    sd_value   = sd(value, na.rm = TRUE),
+    n          = sum(!is.na(value)),
+    se_value   = sd_value / sqrt(n),
+    .groups = "drop"
+  )
+
+ggplot(mean_var_summary, aes(x = year, y = mean_value)) +
+  geom_line(color = "firebrick", linewidth = 1.2) +
+  geom_point(color = "firebrick", size = 2) +
+  geom_ribbon(aes(ymin = mean_value - sd_value,
+                  ymax = mean_value + sd_value),
+              fill = "firebrick", alpha = 0.2) +
+  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Mean ± SD per variable across years",
+    x = "Year", y = "Mean ± SD"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(strip.text = element_text(face = "bold"))
+
+```
+
+
+## Correlation matrix of continuous features at baseline
+
+```{r}
+
+M <- cor(dat[, c("cdrsb0", "bprs0", "abpet0", "taupet0",
+                 "inkomen", "bmi", "job", "trial", "adl", "age", "wzc")],
+         use = "pairwise.complete.obs")
+
+
+melted_M <- reshape2::melt(M)
+
+
+ord <- hclust(dist(M))$order
+melted_M$Var1 <- factor(melted_M$Var1, levels = rownames(M)[ord])
+melted_M$Var2 <- factor(melted_M$Var2, levels = colnames(M)[ord])
+
+
+ggplot(melted_M, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.4) +  # thin white grid lines
+  scale_fill_gradient2(
+    low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation (-1 : 1)"
+  ) +
+  coord_fixed() + 
+  labs(
+    title = "Correlation Heatmap of Continuous Features at Baseline ",
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+    axis.text.y = element_text(size = 11, face = "bold"),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5, color = "gray30"),
+    panel.grid = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+## Correlation matrix of bprs values 
+```{r}
+desired_order <- c("bprs0","bprs1","bprs2","bprs3","bprs4","bprs5","bprs6")
+
+M <- cor(dat[, desired_order],
+         use = "pairwise.complete.obs")
+
+
+melted_M <- reshape2::melt(M)
+
+melted_M$Var1 <- factor(melted_M$Var1, levels = desired_order)
+melted_M$Var2 <- factor(melted_M$Var2, levels = desired_order)
+
+
+ggplot(melted_M, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.4) +  # thin white grid lines
+  scale_fill_gradient2(
+    low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0.9,
+    limits = c(0.8, 1),
+    name = "Correlation (0.8 : 1)"
+  ) +
+  coord_fixed() + 
+  labs(
+    title = "Correlation Heatmap of BPRS scores",
+    x = NULL, y = NULL
+  )
+```
+
+
+
+## Distribution of Age at baseline by sex
+
+```{r}
+ggplot(dat, aes(x = age, fill = as.factor(sex))) +
+  geom_density(alpha = 0.5, color = "black", linewidth = 0.4) +
+  scale_fill_manual(
+    values = c("#4575b4", "#d73027"), 
+    labels = c('Male', 'Female'),
+    name = 'Sex'
+  ) +
+  labs(
+    title = "Age Distribution at baseline by Sex",
+    x = "Age",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    legend.position = "top",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 11),
+    axis.text = element_text(size = 11),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+## EDA by sex 
+```{r}
+dat <- dat %>%
+  mutate(
+    sex = factor(sex, labels = c("Male", "Female")),
+    wzc = factor(wzc, labels = c("Other", "Nursing Home Resident"))
+  )
+
+dat_long <- dat_long %>%
+  mutate(
+    sex = factor(sex, labels = c("Male", "Female")),
+    wzc = factor(wzc, labels = c("Other", "Nursing Home Resident"))
+  )
+
+# Individual points
+ggplot(dat_long, aes(x = time, y = bprs, color = sex)) + 
+  geom_jitter(alpha = 0.6) + 
+  scale_color_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Score by Time and Sex',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+# Individual trajectories
+ggplot(dat_long, aes(x = time, y = bprs, color = sex, group = patid)) + 
+  geom_line(alpha = 0.4) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Score Profiles by Time and Sex',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+# Average profile ± SE by sex
+ggplot(dat_long, aes(x = time, y = bprs, color = sex, group = sex)) + 
+  stat_summary(fun = mean, geom = "line", size = 1) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.3) +
+  scale_color_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal() + 
+  labs(
+    title = 'Average BPRS Score by Time and Sex',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+
+# Boxplot of age at baseline
+ggplot(dat, aes(x = sex, y = age, fill = sex)) +
+  geom_boxplot(alpha = 0.6, color = "black") +
+  scale_fill_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal(base_size = 14) +
+  labs(title = "Age at baseline by Sex", x = "Sex", y = "Age") +
+  theme(legend.position = "none")
+
+
+alive_at_year6 <- dat %>%
+  filter(!is.na(bprs6)) %>%
+  mutate(age_year6 = age + 6)
+
+# Boxplot of age at year 6
+ggplot(alive_at_year6, aes(x = sex, y = age_year6, fill = sex)) +
+  geom_boxplot(alpha = 0.6, color = "black") +
+  scale_fill_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Age at Year 6 by Sex (Only Participants with BPRS6 Available)",
+    x = "Sex",
+    y = "Age at Year 6"
+  ) +
+  theme(legend.position = "none")
+
+
+# Dropouts by sex
+
+dropouts_sex <- dat %>% 
+  group_by(sex) %>%
+  summarise(across(starts_with("bprs"), ~ sum(!is.na(.x)))) %>%
+  ungroup()
+
+dropouts_sex %>%
+  kable(caption = "Number of Patients by Sex at Each Measurement Year") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+
+```
+
+
+
+## EDA by age
+```{r}
+
+
+# Individuals points 
+ggplot(dat_long, aes(x = time, y = bprs, color = age)) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_viridis_c(name = "Age") +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and Age',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+
+set.seed(123) 
+
+sample_ids <- dat_long %>%
+  distinct(patid) %>%
+  sample_n(150) %>%
+  pull(patid)
+
+dat_long_sample <- dat_long %>%
+  filter(patid %in% sample_ids)
+
+# Individual trajectories
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = age)) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_viridis_c(name = "Age") +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and Age (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+# Dropouts by age
+
+dropouts_age <- dat %>%
+  group_by(age) %>%
+  summarise(across(starts_with("bprs"), ~ sum(!is.na(.x)))) %>%
+  ungroup()
+
+dropouts_age %>%
+  kable(caption = "Number of Patients by Age at Each Measurement Year") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+```
+
+
+## EDA by wzc
+```{r}
+
+# Individual points
+ggplot(dat_long, aes(x = time, y = bprs, color = wzc)) + 
+  geom_jitter(alpha = 0.6) + 
+  scale_color_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and WZC',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+
+set.seed(123) 
+
+sample_ids <- dat_long %>%
+  distinct(patid) %>%
+  sample_n(150) %>%
+  pull(patid)
+
+dat_long_sample <- dat_long %>%
+  filter(patid %in% sample_ids)
+
+# Individual trajectories
+ggplot(dat_long, aes(x = time, y = bprs, color = wzc, group = patid)) + 
+  geom_line(alpha = 0.4) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Profiles by Time by Sex',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+# Average profile ± SE by WZC
+ggplot(dat_long, aes(x = time, y = bprs, color = wzc, group = wzc)) + 
+  stat_summary(fun = mean, geom = "line", size = 1) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.3) +
+  scale_color_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal() + 
+  labs(
+    title = 'Average BPRS Score by Time and WZC',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+ggplot(dat, aes(x = wzc, y = age, fill = wzc)) +
+  geom_boxplot(alpha = 0.6, color = "black") +
+  scale_fill_manual(values = c("#4575b4", "#d73027")) +
+  theme_minimal(base_size = 14) +
+  labs(title = "Age at baseline by WZC", x = "WZC", y = "Age") +
+  theme(legend.position = "none")
+
+dropouts_wzc <- dat %>%
+  group_by(wzc) %>%
+  summarise(across(starts_with("bprs"), ~ sum(!is.na(.x)))) %>%
+  ungroup()
+
+dropouts_wzc %>%
+  kable(caption = "Number of Patients by WZC at Each Measurement Year") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+
+
+```
+
+
+## EDA by trial
+```{r}
+
+# Individuals points 
+ggplot(dat_long, aes(x = time, y = bprs, color = as.factor(trial))) + 
+  geom_jitter(alpha = 0.6) +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$trial))),
+    name = "Trial"
+  ) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores as by Time and Trial',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+# Individual trajectories
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = as.factor(trial))) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$trial))),
+    name = "Trial"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and Trial (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+
+ggplot(dat, aes(x = as.factor(trial), y = age, fill = as.factor(trial))) +
+  geom_boxplot(alpha = 0.7, color = "black") +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$trial))),
+    name = "Trial"
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(title = "Age at baseline by Trial", x = "Trial", y = "Age") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+
+
+```
+
+
+## EDA by job
+```{r}
+ggplot(dat_long, aes(x = time, y = bprs, color = as.factor(job))) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$job))),
+    name = "Job"
+  ) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and Job',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = as.factor(job))) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$job))),
+    name = "Job"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and Job (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+ggplot(dat, aes(x = as.factor(job), y = age, fill = as.factor(job))) +
+  geom_boxplot(alpha = 0.7, color = "black") +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$job))),
+    name = "Job"
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Age at Baseline by Job",
+    x = "Job",
+    y = "Age"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+
+## EDA by Adl
+```{r}
+ggplot(dat_long, aes(x = time, y = bprs, color = as.factor(adl))) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$adl))),
+    name = "ADL"
+  ) +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and ADL',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = as.factor(adl))) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_manual(
+    values = grDevices::rainbow(length(unique(dat$adl))),
+    name = "ADL"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and ADL (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+ggplot(dat, aes(x = as.factor(adl), y = age, fill = as.factor(adl))) +
+  geom_boxplot(alpha = 0.7, color = "black", outlier.size = 0.8) +
+  scale_fill_manual(
+    values = grDevices::rainbow(length(unique(dat$adl))),
+    name = "ADL"
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Age at Baseline by ADL",
+    x = "ADL Category",
+    y = "Age"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+
+```
+## EDA by BMI 
+```{r}
+ggplot(dat_long, aes(x = time, y = bprs, color = bmi)) + 
+  geom_jitter(alpha = 0.6) +
+  scale_color_viridis_c(name = "BMI") +
+  theme_minimal() + 
+  labs(
+    title = 'Individual BPRS Scores by Time and BMI',
+    x = 'Year',
+    y = 'BPRS Score'
+  )
+
+ggplot(dat_long_sample, aes(x = time, y = bprs, group = patid, color = bmi)) +
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  scale_color_viridis_c(name = "BMI") +
+  theme_minimal() +
+  labs(
+    title = "Individual BPRS Profiles by Time and BMI (Sample of 150 Patients)",
+    x = "Year",
+    y = "BPRS Score"
+  )
+
+dat <- dat %>%
+  mutate(age_bin = cut(
+    age,
+    breaks = c(-Inf, 60,70, 80, Inf),
+    labels = c("<60", "60-70", "70-80", "80+"),
+    right = FALSE
+  ))
+
+
+ggplot(dat, aes(x = age_bin, y = bmi, fill = age_bin)) +
+  geom_boxplot(alpha = 0.7, color = "black") +
+  scale_fill_manual(values = c("#b3cde0", "#005b96", "#03396c","#011f4b")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "BMI at Baseline by Age Group",
+    x = "Age Group",
+    y = "BMI"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+
+
+## Overall dropout rate
+
+```{r}
+non_na_counts <- dat %>%
+  summarise(across(starts_with("bprs"), ~ sum(!is.na(.x))))
+
+plot_data <- non_na_counts %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "measurement_occasion",
+    values_to = "count"
+  ) %>%
+  mutate(year = as.numeric(gsub("bprs", "", measurement_occasion)))
+
+ggplot(plot_data, aes(x = year, y = count)) +
+  geom_col(fill = "steelblue", color = "black") + 
+  geom_text(aes(label = count), vjust = -0.5) + 
+  theme_minimal() +
+  labs(
+    title = "Number of Available Observations at Each Time Point",
+    x = "Year",
+    y = "Number of available observations"
+  )
+```
+## Correlation between dropout rate and age and bprs at baseline
+
+```{r}
+dat$NAs_1 <- as.numeric(is.na(dat$bprs1))
+dat$NAs_2 <- as.numeric(is.na(dat$bprs2))
+dat$NAs_3 <- as.numeric(is.na(dat$bprs3))
+dat$NAs_4 <- as.numeric(is.na(dat$bprs4))
+dat$NAs_5 <- as.numeric(is.na(dat$bprs5))
+dat$NAs_6 <- as.numeric(is.na(dat$bprs6))
+
+corr_data <- dat %>%
+  select(age, bprs0, NAs_1:NAs_6)
+
+cor_matrix <- cor(corr_data, use="pairwise.complete")
+
+melted <- melt(cor_matrix)
+
+ggplot(melted, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile(color = "white", linewidth = 0.4) +  # thin white grid lines
+  scale_fill_gradient2(
+    low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation (-1 : 1)"
+  ) +
+  coord_fixed() + 
+  labs(
+    title = "Correlation Heatmap ",
+    subtitle = "Number of Dropouts with Age and BPRS at Baseline",
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+    axis.text.y = element_text(size = 11, face = "bold"),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5, color = "gray30"),
+    panel.grid = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+```
+
+
+```{r}
+# Paired t-tests baseline (0) vs final (6)
+t.test(dat$cdrsb0, dat$cdrsb6, paired = TRUE)
+t.test(dat$bprs0,  dat$bprs6,  paired = TRUE)
+t.test(dat$abpet0, dat$abpet6, paired = TRUE)
+t.test(dat$taupet0,dat$taupet6,paired = TRUE)
+```
+
+## Preliminary OLS model
+```{r}
+# We fit a standard linear model (OLS) ignoring the patient-specific correlations.
+preliminary_ols_model <- lm(bprs ~ time_num + sex + age + wzc + adl, 
+                             data = dat_long, na.action = na.exclude)
+
+
+# The residuals represent the part of the BPRS score that is NOT explained by the average trend.
+# In theory, this is what's left over for the random effects and residual error to explain.
+
+dat_long$ols_residuals = residuals(preliminary_ols_model)
+
+
+# If the random effects were just a random intercept (b_0i), these profiles should be flat but
+# shifted up or down for each patient, with random noise.
+# If there is a random slope (b_1i), we would expect to see individual slopes in these residual profiles.
+
+ggplot(dat_long, aes(x = time_num, y = ols_residuals, group = patid)) +
+  geom_line(alpha = 0.3) + 
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "OLS Residual Profiles for Each Patient",
+       x = "Year (Numeric)",
+       y = "OLS Residuals") +
+  theme_minimal()
+```
+
+# Conclusion 
+
+Summarize your conclusions. What are the implications with respect to
+statistical modeling ? 
+
+
+From our exploratory data analysis, we observe that each patient’s clinical and neuroimaging features were measured up to six times, corresponding to annual follow-ups over six years. The variable of interest, BPRS, which measures the severity of psychiatric symptoms, shows a linear trend over time. The variance appears to remain more or less constant across the years.
+
+Among the four measures, BPRS shows by far the greatest change across time. This indicates that behavioral and psychiatric deterioration dominates the longitudinal trajectory, whereas cognitive decline (CDRSB) is more moderate, and biological markers (ABPET, TAUPET) show much smaller absolute shifts. All variables show statistically significant changes, but their effect sizes differ dramatically, emphasizing that statistical significance does not necessarily imply clinical importance* 
+
+*(Matteo: I am not sure anymore about this sentence, because we have no idea how clinically relevant is a big change in one feature. As in, maybe a smaller absolute change in ABPET has much stronger clinical effects than a bigger absolute change in BPRS). 
+
+The correlation matrix indicates that BPRS at baseline is positively correlated with age, WZC, and other clinical features, while it is negatively correlated with job, ADL, trial, and income. However, further exploration suggests that age is likely the main driver of variation in BPRS.
+
+A spurious association is observed between sex and BPRS: women appear to have higher BPRS scores than men, but this can be explained by their higher mean age at baseline. Similar spurious relationships are found for WZC, job, ADL, and trial, all of which are confounded by age.
+
+The longitudinal plots confirm a positive, linear association between age and BPRS. There is also considerable attrition over time, with the number of observations decreasing from 1,253 at baseline to 511 at year six. Approximately 63% of the dropouts are women, likely due to their higher baseline age, which may have led to faster progression of psychiatric symptoms or inability to continue participation. It is plausible that participants with high baseline BPRS scores either died or became too impaired to remain in the study.
+
+This pattern of dropout might explain why the overall variance of BPRS appears constant over time. Although sample size decreases, the reduction in the range of BPRS values among remaining participants likely counterbalances the expected increase in variance.
+
+Based on these findings, a linear mixed-effects model is the most appropriate statistical approach for analyzing this longitudinal dataset. Time and age should be included as fixed effects, with patient ID modeled as a random effect to account for repeated measures within individuals. Since patients are also nested within trials, trial can be included as an additional random effect. The residuals extracted from the OLS model follow this formula: $r_i = y_i - X_i\hat{\beta}_{OLS} \approx Z_ib_i + \epsilon_i$, which implies that after taking into account the fixed effects, any variance left is the sum of subject-specific effects plus any residual variance. From the spaghetti plot of the residuals we can confirm that different subjects need different intercepts. This plot also reveals the need of subject-specific slopes, as some subjects' bprs score increase faster or slower than the average over time. The fact that the residuals cluster around 0 shows that the distributional assumption $E \left( \begin{pmatrix} b_{0i} \\ b_{1i} \end{pmatrix} \right) = \begin{pmatrix} 0 \\ 0 \end{pmatrix}$ is met. 
+
+Finally, given that the data are collected at regular time intervals, it is reasonable to assume an autoregressive correlation structure for the within-subject residuals, capturing the expected correlation between adjacent time points (plot a semivariogram once the linear mixed model is fitted).
+
+
