@@ -1,0 +1,667 @@
+---
+title: "question3"
+author: "Ermioni Athanasiadi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(haven)
+library(tidyverse)
+library(patchwork)
+library(pROC)
+library(nlme)
+library(data.table)
+library(broom)
+
+```
+
+
+```{r}
+setwd("./assignment1/data")
+
+filename <- "alzheimer25.sas7bdat"
+
+dat <- read_sas(filename)
+dat_dt <- setDT(read_sas(filename))
+```
+
+
+Data Preparation
+```{r reshape}
+
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat) {
+    dat <- dat %>%
+        mutate(
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+        )
+    dat
+}
+
+dat <- to_factor(dat)
+dat_long <- reshape_dat(dat)
+
+
+dat_long <- dat_long %>%
+    mutate(
+        time = as.factor(time),  # levels 0-6
+        time.num = as.numeric(time)   # values 1-7
+    )
+
+
+
+
+```
+
+```{r}
+# Baseline per subject (year 0)
+base <- dat_long %>%
+  filter(time == 0) %>%
+  transmute(
+    patid, trial,
+    # Age = age, Sex = sex, Edu = edu, BMI = bmi, Job = job, Income = inkomen,
+    # ADL = adl, WZC = wzc,
+    cdrsb.0 = cdrsb, 
+    abpet.0 = abpet, 
+    taupet.0 = taupet
+  )
+
+# Add baseline + time to all rows
+dat_long <- dat_long %>%
+  left_join(base, by = c("patid","trial"))
+
+rm(base)
+```
+
+
+# *Open Questions*
+
+1) fit with vs. without intercept
+
+# *To Do*
+- replace time-varying predictors with baseline level in all models
+
+
+# Q3: Multivariate Model
+_Q3. Fit a multivariate model, and find the most parsimonious mean structure which can be used to describe the average evolutions in the data. What covariance structures are applicable in this case ? What is the most parsimonious structure you can find?_
+
+Let's prepare our dataset for the use with nlme. 
+
+We need complete observations per subject
+```{r}
+dat_long <- dat_long %>%
+  mutate(patid = as.factor(patid))
+
+dat_long_cmpl <- dat_long %>% select(patid, bprs, sex, time, age, trial,
+                                     edu, bmi, inkomen, job, adl, wzc, 
+                                     time.num,
+                                     cdrsb, taupet, abpet) %>% na.omit()
+
+dat_long_cmpl <- dat_long_cmpl %>%
+  arrange(patid, time)
+
+
+dat_long_cmpl2 <- dat_long_cmpl %>%
+  group_by(patid) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+```
+
+Let's have a look at the number of observations per subject:
+```{r}
+table(dat_long$patid) %>% table()
+table(dat_long_cmpl$patid) %>% table()
+table(dat_long_cmpl2$patid) %>% table()
+
+# do they add up?
+table(dat_long_cmpl$patid) %>% table() %>% sum()
+
+tab <- dat_long_cmpl %>% group_by(patid) %>% summarize(
+  patid = n()
+)
+
+tab
+
+
+```
+We have n = 1253 subjects in our dataset.
+
+When keeping only subjects with complete observations, we exclude n = 147 persons from our sample.
+
+We have > 1 observation for each subject in our dat_long_compl2. 
+
+
+#### Mean structure
+##### Main effects
+
+###### Try: multivariate model fitted with multiple outcomes
+```{r}
+
+form_multivar <- cbind(bprs0, bprs1, bprs2, bprs3, bprs4, bprs5, bprs6) ~ age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb0 + abpet0 # + taupet0 not estimated due to singularities
+
+
+# multivariate ols ### from Matteo: we can't fit an OLS in this case, unless you fit it to extract and analyze the residuals for EDA. 
+                   ### OLS assumes independent residuals and homoskedasticity, GLS doesn't. 
+m_ols <- lm(
+  form_multivar,
+  data = dat
+)
+
+# multivariate gls
+m_gls <- gls(
+  model = form_multivar, # + taupet0 -> include only 1 biomarker, because of Singulary issues
+  method = "ML",
+  data = dat,
+  na.action = na.exclude  # missing observations are a problem 
+)
+
+```
+
+
+```{r}
+summary(m_ols)
+summary(m_gls)
+
+```
+
+...and have a closer look at the coefficients
+```{r}
+
+# lets look at the coefficients
+round(m_ols$coefficients, 3)
+round(m_gls$coefficients, 3)
+```
+
+Ok, the models have identical coefficients for the first outcome bprs0. This confirms that fitting a GLS model without specific (co)variance structures is equivalent to fitting an OLS model if no special variance or covariance structure is specified.
+BUT gls() (in contrast to lm()) *drops* all additional outcomes, so we only get estimates for bprs0. lm() does this for us all in one function call.
+
+But we would like to continue with the gls() fitted model.
+Not only because it prints AIC etc. for Likelihood ratio tests.
+But more importantly, because it allows us to play with the correlation and variance structures.
+
+So we have to drop this approach and build the model with the long dataset, with a time variable to account for the repeated measurements.
+
+Remarks about the multivariate model:
+It is suitable if only few repeated measurements per subject exist. With up to 6 time points. this may not be the best case with our data.
+A multivariate model may be able to handle unequal numbers of measurements per subject (due to missing data).
+In R this works: But because the implemented functions require complete data, missing observations are excluded prior to model fitting. 
+
+In the course notes it is mentioned that the balance of data matters when fitting a multivariate model (p.92).
+
+This refers to the number of measurements per subject: In our data, we have quite some unbalance as many subjects drop out over time. But, they are all measured at the same time points, which is good.
+The recommendation for unbalanced data is to fit multivariate models only under very specific variance and covariance conditions.
+-> Toeplitz and AR(1) are invalid because time points are not equally spaced for all subjects.
+-> compound symmetry is valid but based on strong assumptions
+
+###### Model selection 
+```{r}
+m_full <- gls(
+  bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb + abpet + taupet, # - 1: we could also remove the intercept: then no absolute, not relative to bl
+  #weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+
+m1 <- m_full
+
+m2 <- update(m1, . ~ . - inkomen)
+anova(m1, m2)  # exclude inkomen
+m1 <- m2
+
+m3 <- update(m1, . ~ . - bmi)
+anova(m1, m3)
+
+m4 <- update(m1, . ~ . - job)
+anova(m1, m4) 
+
+m5 <- update(m1, . ~ . - edu)
+anova(m1, m5)
+
+m6 <- update(m1, . ~ . - wzc)
+anova(m1, m6)
+
+m7 <- update(m1, . ~ . - adl)
+anova(m1, m7)
+
+m8 <- update(m1, . ~ . - trial)
+anova(m1, m8)
+
+m9 <- update(m1, . ~ . - taupet)
+anova(m1, m9)
+
+m10 <- update(m1, . ~ . - abpet)
+anova(m1, m10)
+
+m11 <- update(m1, . ~ . - sex)
+anova(m1, m11)
+m1 <- m11  # exclude sex
+
+m12 <- update(m1, . ~ . - age)
+anova(m1, m12)
+
+m13 <- update(m1, . ~ . - time.num)
+anova(m1, m13)
+
+rm(m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12)
+```
+
+The strongest Likelihood Ratios are obtained for time, age and trial. 
+We only exclude inkomen and sex as predictors.
+
+
+So our final model based on Likelihood Inference looks like this
+
+bprs ~ time.num + age + trial + edu + bmi + job + adl + wzc + cdrsb + abpet + taupet
+
+
+Sidenote: 
+If we use the wide format data and do the same model selection but start with an OLS model as fitted with lm() and update it, we get different Likelihood Ratio Test results and different p values than with gls(). So this is probably due to the ignorance of the other outcomes in gls().
+
+
+##### Interaction effects I
+Now lets see if some interactions are meaningful:
+```{r}
+m_start <- m1
+```
+
+```{r}
+m1 <- m_start
+
+m2 <- gls(
+  bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m2)
+m1 <- m2
+
+m3 <- gls(
+  bprs ~ time.num * age * trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m3)  # the performance criteria give inconsistent results. lets not update the model, as we have to fit 23 additional pars
+
+m4 <- gls(
+  bprs ~ time.num * age * cdrsb.0  + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m4) 
+# we could choose this model, but the Likelihood Ratio is not super large
+
+m5 <- gls(
+  bprs ~ time.num * age * wzc + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m5)  # does not differ 
+
+rm(m2, m3, m4, m5)
+
+```
+The following interactions between time and other predictors seem plausible for our data.
+
+time.num * age
+
+Also possible:
+time.num * age * cdrsb.0 
+
+
+##### Interaction effects II
+What about other interactions?
+```{r}
+m_start <- m1
+```
+
+```{r}
+m1 <- m_start
+
+
+# m2 <- gls(
+#    bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 * taupet.0,
+#   method = "ML",
+#   data = dat_long,
+#   na.action = na.exclude
+# )
+# anova(m1, m2)  # interaction between the biomarkers fails to converge due to singularity
+# m1 <- m2
+
+m3 <- gls(
+  bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 * abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m3) 
+
+m4 <- gls(
+  bprs ~ time.num * age + trial + edu * job + bmi + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m4) 
+
+m5 <- gls(
+  bprs ~ time.num * age + trial + edu + job + bmi * adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m5) 
+ 
+
+rm(m2, m3, m4, m5)
+
+m.meanstr <- m1
+
+```
+
+No other interactions reach significance and seem plausible for the data.
+
+##### Non-linear trends
+Now lets see if we can detect some non-linear trends
+```{r eval=FALSE, include=FALSE}
+m1_save <- m1
+
+
+m2 <- gls(
+  bprs ~ time + I(time_num^2) + sex + age + adl + trial + edu + job + bmi + cdrsb + wzc + taupet * abpet, 
+  method = "ML",
+  data = dat_long_cmpl
+)
+anova(m2, m1) 
+
+```
+this does not work yet. 
+
+---------------------------------------------------------------------------------
+
+Our current model looks like this: 
+
+bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 
+
+
+
+#### Variance Structure
+Now what if we add weights to our variances to allow for heterogeneity?
+```{r}
+
+## Model fixed effects form
+form <- bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 
+
+# (corresponding SAS argument would be type = VC)
+m2 <- gls(
+  model = form, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+summary(m2)
+anova(m.meanstr, m2)
+
+m1 <- m2
+m.varstr <- m1
+
+
+```
+
+Ok, so fitting different variances per year does improve our model fit. Lets stick with this model.
+
+
+#### Covariance structure
+
+
+Now lets look at the correlations:
+```{r}
+
+
+# ---- Model 2a: with unstructured errors: every time point has own variance, 
+# and all year-pairs can have their own covariance 
+m2 <- gls(
+  model = form, 
+  correlation = corSymm(form = ~ 1 | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+anova(m1, m2)  # allowing different correlations between errors is better
+getVarCov(m2)
+
+# m1 <- m2
+
+
+# ---- Model 2b: now add time as our ordering variable: treat time as numeric, to respect the ordering
+m3 <- gls(
+  model = form, 
+  correlation = corSymm(form = ~ time.num | patid),   ###
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long, # dat_long_cmpl2  # using only subset of data with > 1 obs per subject
+  na.action = na.exclude
+)
+summary(m3)
+#   AIC      BIC   logLik
+#   26463.21 26946.44 -13159.6
+anova(m1, m3)
+getVarCov(m3)
+m1 <- m3
+
+## ---- Model 4: Compound symmetry
+m4 <- gls(
+  model = form, 
+  correlation = corCompSymm(form = ~ time.num | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+
+anova(m1, m4)  # allowing different correlations between errors is better
+getVarCov(m4)
+m1_save <- m1
+# m1 <- m4
+
+## ---- Model 5: Autoregressive: decreasing correlations with increasing time lag, stronger ones for adjancent lags
+m5 <- gls(
+  model = form, 
+  correlation = corAR1(form = ~ time.num | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+
+anova(m1, m5)  # we can't compare the models anymore due to same nr of df's
+getVarCov(m5)
+
+# ---- Model 6: Toeplitz (ARMA(6,0)) ----
+m6 <- gls(
+  model = form,
+  correlation = corARMA(form = ~ time.num | patid, p = 6, q = 0),
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  data = dat_long,
+  method = "ML",
+  na.action = na.exclude
+)
+anova(m1, m6)  
+getVarCov(m6)
+
+
+m.covarstr <- m6  # toeplitz structure
+
+```
+
+Model 2 with correlated (unstructured) errors improves fit -> We keep the model.
+But the problem is, we have missing data in some years --> to apply unstructured covariance structure for errors, we can only use complete observations. But this is the case for other structures, too.
+
+Model 3 imposes an ordering of the correlations based on the time variable -> We can't compare it to the other model anymore because with time as numeric, it uses different number of observations.
+
+Conceptually, the syntax of Model 3 but with time as factor should be equivalent to Model 2 as our time variable is ordered.
+
+Model 4 imposes compound symmetry. 
+
+Model 5 introduces autoregressive correlation structure. It improves model fit, so we keep it. Probably mainly due to the more parsimonious structure.
+
+Model 6 uses the Toeplitz structure.
+
+We can't compare Model 5 and 4 directly, so we have to look at AIC and BIC to get an ide which covariance structure is better.
+
+--> model 3 performs best in a Likelihood Ratio test. but its a complicated structure. If we want to have a more parsimonious one, we could chose between Model4-Model6. 
+
+
+Summarising the conclusions on variance & covariance structure:
+- The AR(1) component captures the temporal correlation in repeated BPRS measures — i.e., scores from adjacent years are more similar than those several years apart.
+- The heterogeneous variance (varIdent) allows different variability per year, which is realistic in your study since measurement noise and patient dropout tend to increase over time.
+- The significant improvement in log-likelihood and lower AIC/BIC demonstrate that this flexibility meaningfully improves model fit without overfitting.
+- This means that correlations between consecutive yearly measurements decay exponentially with time lag, while allowing variability to differ across years
+
+
+Let's have a closer look at the variances and correlations of our models:
+```{r}
+weights <- coef(m.covarstr$modelStruct$varStruct)
+summary(m.covarstr)$sigma * weights
+
+```
+
+
+```{r eval=FALSE, include=FALSE}
+control_lme <- lmeControl(
+  opt = "nlminb", 
+  msMaxIter = 200,       # max iterations of optimizer
+  msMaxEval = 400,       # total evaluations
+  returnObject = TRUE
+)
+
+### Model evaluation
+# AIC()
+```
+
+
+```{r}
+### visualize the variances to find out
+```
+
+
+#### with small model:
+We try some stuff out, using only age as a predictor. 
+Lets do it as asked in the assignment and predict the BPRS score (which is a psychiatric score). It would make more sense, of course, to predict the dementia score with the psychiatric condition and not the other way round. 
+
+In this multivariate model, we will estimate the following predictors:
+
+$Y_{i1} = beta_{0,0}(1-x_i) + \beta_{1,0}x_i + \epsilon_{i1} $
+$Y_{i2} = beta_{0,1}(1-x_i) + \beta_{1,1}x_i + \epsilon_{i2} $
+$Y_{i3} = beta_{0,2}(1-x_i) + \beta_{1,2}x_i + \epsilon_{i3} $
+$Y_{i4} = beta_{0,3}(1-x_i) + \beta_{1,3}x_i + \epsilon_{i4} $
+$Y_{i5} = beta_{0,4}(1-x_i) + \beta_{1,4}x_i + \epsilon_{i5} $
+$Y_{i6} = beta_{0,5}(1-x_i) + \beta_{1,5}x_i + \epsilon_{i6} $
+$Y_{i7} = beta_{0,6}(1-x_i) + \beta_{1,6}x_i + \epsilon_{i7} $
+
+Although we name the time predictors starting with baseline measurement 0, let's keep the 1-based indexing for the model.
+```{r eval=FALSE, include=FALSE}
+# with nlme package ###
+
+# start with uncorrelated errors
+# (corresponding SAS argument would be type = VC)
+bprs_mod0 <- gls(
+  bprs ~ time + age, # - 1: we could also remove the intercept: then no absolute, not relative to bl
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(bprs_mod0)
+
+# continue with unstructured errors: every time point has own variance, 
+# and all year-pairs can have their own covariance 
+bprs_mod1 <- gls(
+  bprs ~ time + age,  # remove intercept, so absolute, not relative to bl
+  correlation = corSymm(form = ~ 1 | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(bprs_mod1)
+getVarCov(bprs_mod1)
+
+# now with interaction of time and age
+bprs_mod2 <- gls(
+  bprs ~ time * age,  
+  correlation = corSymm(form = ~ 1 | patid),   # unstructured within-subject correlation
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl
+)
+summary(bprs_mod2)
+getVarCov(bprs_mod2)
+
+
+# now add time as our ordering variable: treat time as numeric, to respect the ordering
+bprs_mod3 <- gls(
+  bprs ~ time + age,  
+  correlation = corSymm(form = ~ as.numeric(time) | patid),   # order the 
+  weights = varIdent(form = ~ 1 | time),       # different variances per year
+  method = "ML",
+  data = dat_long_cmpl2  # using only subset of data with > 1 obs per subject
+)
+summary(bprs_mod3)
+getVarCov(bprs_mod3)
+
+
+```
+We wanted to fit a model for our endpoint measured at 7 time points and fit the model with sex as predictor. That should give us 14 beta coefficients -> correct
+
+Model 3:
+The question is whether ordered factors would be more appropriate here than a numeric time variable. A factor cannot be handled for model estimation, though. 
+
+
+Now what if we fit without an intercept?
+```{r eval=FALSE, include=FALSE}
+bprs_mod0noint <- gls(
+    bprs ~ time + age - 1,  # remove intercept, so absolute, not relative to bl
+    method = "ML",
+    data = dat_long_cmpl
+)
+summary(bprs_mod0)
+
+sum_bprs_mod0noint <- summary(bprs_mod0noint)
+
+sum_bprs_mod0noint$corBeta
+sum_bprs_mod0noint$corBeta
+
+rm(bprs_mod0, bprs_mod1, bprs_mod2, bprs_mod3, bprs_mod0noint, sum_bprs_mod0noint)
+```
+All correlations get "eaten up" by the intercept, if we fit one. It represents the predicted value of our outcome (BPRS score) when all predictors are set to 0.
+While a time = 0 makes sense here, the variable age is not that meaningful at age = 0. 
+We could center age to make it interpretable: Then, the intercept would indicate the predicted outcome at the mean age of our sample at year 0 (baseline).
+
+
+
+
