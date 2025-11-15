@@ -345,25 +345,31 @@ dat_long$resid_n <- residuals(m_full, type = "normalized")  # standardized res
 ggplot(dat_long, aes(x = factor(time.num), y = resid_p)) +
   geom_jitter(alpha = 0.2, width = 0.15) +
   geom_boxplot(outlier.shape = NA, alpha = 0.6) +
-  labs(x = "Time", y = "Pearson residuals",
+  labs(x = "Year", y = "Pearson residuals",
        title = "Residuals by time level") +
   theme_bw()
+ggsave("./../figures/q3_resid_p.png", width = 8, height = 6, dpi = 300)
 
 ggplot(dat_long, aes(x = factor(time.num), y = resid_n)) +
   geom_jitter(alpha = 0.2, width = 0.15) +
   geom_boxplot(outlier.shape = NA, alpha = 0.6) +
-  labs(x = "Time", y = "Pearson residuals",
+  labs(x = "Year", y = "Pearson residuals",
        title = "Residuals by time level") +
   theme_bw()
+ggsave("./../figures/q3_resid_n.png", width = 8, height = 6, dpi = 300)
 
+years <- c("Year 0", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5", "Year 6")
 ggplot(dat_long, aes(x = fitted(m_full), y = resid_n)) +
   geom_point(alpha = 0.3) +
   geom_hline(yintercept = 0) +
-  labs(title = "Standardized residuals vs fitted") +
-  theme_bw()
+  labs(x = "Fitted residuals",
+      title = "Standardized residuals vs fitted") +
+  theme_bw() 
+ggsave("./../figures/q3_resid_vs_fitted.png", width = 8, height = 6, dpi = 300)
 
-plot(m_full, resid(., type = "p") ~ fitted(.) | time.num,
-     abline = 0)
+plot(m_full, resid(., type = "p") ~ fitted(.) | as.factor(time.num),
+     abline = 0, ylab = "Fitted residuals")
+ggsave("./../figures/q3_resid_vs_fitted_by_year.png", width = 8, height = 6, dpi = 300)
 
 ```
 Apart from the dropout thats clearly visible, the errors dont look too dissimilar between years. That suggests that we could probably also go for a homoscedastic model.
