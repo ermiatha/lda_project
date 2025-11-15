@@ -160,7 +160,8 @@ We have > 1 observation for each subject in our dat_long_compl2.
 form_multivar <- cbind(bprs0, bprs1, bprs2, bprs3, bprs4, bprs5, bprs6) ~ age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb0 + abpet0 # + taupet0 not estimated due to singularities
 
 
-# multivariate ols
+# multivariate ols ### from Matteo: we can't fit an OLS in this case, unless you fit it to extract and analyze the residuals for EDA. 
+                   ### OLS assumes independent residuals and homoskedasticity, GLS doesn't. 
 m_ols <- lm(
   form_multivar,
   data = dat
