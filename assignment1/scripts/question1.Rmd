@@ -33,6 +33,7 @@ invisible(lapply(libraries, library, character.only = TRUE))
 
 
 ```{r}
+setwd("./../data")
 dat <- read_sas("alzheimer25.sas7bdat")
 str(dat)
 colSums(is.na(dat))

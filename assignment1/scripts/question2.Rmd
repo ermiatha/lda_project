@@ -11,6 +11,7 @@ libraries <- c(
   "viridis", "knitr", "kableExtra", "e1071"
 )
 
+setwd("./../data")
 dat <- read_sas("alzheimer25.sas7bdat")
 str(dat)
 colSums(is.na(dat))

@@ -23,7 +23,7 @@ library(broom)
 
 
 ```{r}
-setwd("./assignment1/data")
+setwd("./../data")
 
 filename <- "alzheimer25.sas7bdat"
 
