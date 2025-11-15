@@ -347,6 +347,23 @@ m0 <- lme(
 anova(m0, m_full)
 ```
 
+###### Export results
+```{r}
+length(m_full$coefficients$fixed)
+noquote(names(m_full$coefficients$fixed))  # add: print as latex table
+
+```
+```{r}
+tab_model(m_full,
+          file = "model.tex",
+          show.r2 = TRUE,
+          show.se = TRUE
+          # dv.labels = "Response",
+          # pred.labels = c("Intercept", "X variable", "Z variable")
+          )
+```
+
+
 #### Selection of Fixed effects
 With our preliminary mean structure, we will now try to reduce the model stepwise:
 Lets start with the main effects:
@@ -604,6 +621,10 @@ Possible Covariance and Variance Specifications:
 - allowing separate covariances for different years
 - readding the weights
 
+Note about form of the Cor structure:
+correlation structure is assumed to apply only to observations within the same grouping level (i.e. within the same patient/trial); observations with different grouping levels (patients) are assumed to be uncorrelated
+
+
 ##### M2
 ```{r}
 # ---- Model 2: with unstructured errors: every time point has own variance, 
@@ -831,6 +852,12 @@ get_cov_matrix <- function(mod) {
 }
 
 
+```
+
+#### Robust estimation
+```{r}
+# error: correct dataset to be used
+# coef_test(m_full, vcov = "CR2", cluster = na.exclude(dat_long$time))
 ```
 
 
