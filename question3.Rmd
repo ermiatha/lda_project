@@ -93,6 +93,12 @@ dat_long <- dat_long %>%
 rm(base)
 ```
 
+Because further below, we want to add nested random effects of patients within trial centers, let's confirm that patients indeed only appear in a single trial center:
+```{r}
+dat_long %>% select(patid, trial) %>% dplyr::group_by(patid) %>% summarise(n_trials = n_distinct(trial)) %>% summarise(n = n())
+# confirmed
+```
+
 
 # *Open Questions*
 
@@ -330,6 +336,42 @@ ggplot(dat_ranefs, aes(x = reorder(patid, intercept), y = intercept)) +
 
 ```
 
+Lets also visualize the residuals to check if our variance structure seems plausible:
+```{r}
+
+dat_long$resid_p <- residuals(m_full, type = "pearson")
+dat_long$resid_n <- residuals(m_full, type = "normalized")  # standardized res
+
+ggplot(dat_long, aes(x = factor(time.num), y = resid_p)) +
+  geom_jitter(alpha = 0.2, width = 0.15) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  labs(x = "Time", y = "Pearson residuals",
+       title = "Residuals by time level") +
+  theme_bw()
+
+ggplot(dat_long, aes(x = factor(time.num), y = resid_n)) +
+  geom_jitter(alpha = 0.2, width = 0.15) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  labs(x = "Time", y = "Pearson residuals",
+       title = "Residuals by time level") +
+  theme_bw()
+
+ggplot(dat_long, aes(x = fitted(m_full), y = resid_n)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0) +
+  labs(title = "Standardized residuals vs fitted") +
+  theme_bw()
+
+plot(m_full, resid(., type = "p") ~ fitted(.) | time.num,
+     abline = 0)
+
+```
+Apart from the dropout thats clearly visible, the errors dont look too dissimilar between years. That suggests that we could probably also go for a homoscedastic model.
+
+However, we can see that the errors are more dense/spread out in certain years compared to others. E.g. Years 3 and 6 have a smaller variance.
+
+
+
 
 ###### Compare with null model
 
@@ -354,13 +396,28 @@ noquote(names(m_full$coefficients$fixed))  # add: print as latex table
 
 ```
 ```{r}
+
+
+# fit table in html
 tab_model(m_full,
-          file = "model.tex",
+          file = "model.html",
           show.r2 = TRUE,
           show.se = TRUE
           # dv.labels = "Response",
           # pred.labels = c("Intercept", "X variable", "Z variable")
           )
+
+
+# fit table in latex
+xtable(summary(m_full)$tTable)
+```
+
+```{r}
+
+library(kableExtra)
+
+# kbl(m_full, digits = 3, booktabs = T, escape = F, caption = "Test")
+
 ```
 
 
