@@ -18,6 +18,7 @@ library(pROC)
 library(nlme)
 library(data.table)
 library(broom)
+library(lattice)
 
 ```
 
@@ -366,21 +367,26 @@ anova(m1, m4)
 
 m5 <- update(m1, . ~ . - edu)
 anova(m1, m5)
+# exclude edu
 
 m6 <- update(m1, . ~ . - wzc)
 anova(m1, m6)
 
 m7 <- update(m1, . ~ . - adl)
 anova(m1, m7)
+m1 <- m7
+# exclude adl
 
 m8 <- update(m1, . ~ . - trial)
 anova(m1, m8)
 
 m9 <- update(m1, . ~ . - taupet.0)
 anova(m1, m9)
+m1 <- m9  # exclude taupet
 
 m10 <- update(m1, . ~ . - abpet.0)
 anova(m1, m10)
+m1 <- m10 # exclude abpet
 
 m11 <- update(m1, . ~ . - sex)
 anova(m1, m11)
@@ -399,12 +405,17 @@ anova(m1, m14)
 
 The strongest Likelihood Ratios are obtained for time, age and trial. 
 We only exclude inkomen and sex as predictors.
-*Update* We can also exclude edu and adl.
+*Update* We also exclude 
+- edu
+- adl
+- taupet.0
+- abpet.0
 
 
-So our final model based on Likelihood Inference looks like this
 
-bprs ~ time.num + age + trial + edu + bmi + job + adl + wzc + cdrsb + abpet + taupet
+So the most parsimonious model based on Likelihood Inference looks like this
+
+bprs ~ time.num + age + trial + bmi + job + wzc + cdrsb.0
 
 
 Sidenote: 
