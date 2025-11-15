@@ -23,7 +23,7 @@ for (pkg in libraries) {
 # Load all packages
 invisible(lapply(libraries, library, character.only = TRUE))
 
-
+setwd("./../data")
 dat <- read_sas("alzheimer25.sas7bdat")
 ```
 
