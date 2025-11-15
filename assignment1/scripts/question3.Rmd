@@ -339,6 +339,7 @@ ggplot(dat_ranefs, aes(x = reorder(patid, intercept), y = intercept)) +
 Lets also visualize the residuals to check if our variance structure seems plausible:
 ```{r}
 
+
 dat_long$resid_p <- residuals(m_full, type = "pearson")
 dat_long$resid_n <- residuals(m_full, type = "normalized")  # standardized res
 
@@ -367,15 +368,16 @@ ggplot(dat_long, aes(x = fitted(m_full), y = resid_n)) +
   theme_bw() 
 ggsave("./../figures/q3_resid_vs_fitted.png", width = 8, height = 6, dpi = 300)
 
-plot(m_full, resid(., type = "p") ~ fitted(.) | as.factor(time.num),
+q3_resid_vs_fitted_by_year <- plot(m_full, resid(., type = "p") ~ fitted(.) | as.factor(time.num),
      abline = 0, ylab = "Fitted residuals")
-ggsave("./../figures/q3_resid_vs_fitted_by_year.png", width = 8, height = 6, dpi = 300)
+png("./../figures/q3_resid_vs_fitted_by_year.png")
+print(q3_resid_vs_fitted_by_year)
+dev.off()
 
 ```
 Apart from the dropout thats clearly visible, the errors dont look too dissimilar between years. That suggests that we could probably also go for a homoscedastic model.
 
 However, we can see that the errors are more dense/spread out in certain years compared to others. E.g. Years 3 and 6 have a smaller variance.
-
 
 
 
