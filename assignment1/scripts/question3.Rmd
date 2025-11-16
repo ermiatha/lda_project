@@ -23,6 +23,7 @@ library(lattice)
 ```
 
 
+
 ```{r}
 setwd("./../data")
 
@@ -203,6 +204,21 @@ m_full <- lme(
 summary(m_full)
 ```
 
+```{r}
+form_full = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 
+
+m_full <- gls(
+  model = form_full, # - 1: we could also remove the intercept: then no absolute, not relative to bl
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  #correlation = corSymm(form = ~ 1 | trial/patid),
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude#,
+  #   control = control_lme
+)
+
+summary(m_full)
+```
 We start with a full model that contains all parameters (fixed effects).
 
 We specify no correlation structure (default is uncorrelated).
