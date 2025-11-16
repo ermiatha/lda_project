@@ -104,9 +104,10 @@ dat_long %>% select(patid, trial) %>% dplyr::group_by(patid) %>% summarise(n_tri
 # *Open Questions*
 
 1) fit with vs. without intercept
+2) Sex in or out
 
 # *To Do*
-- replace time-varying predictors with baseline level in all models
+
 
 ```{r eval=FALSE, include=FALSE}
 control_lme <- lmeControl(
@@ -115,6 +116,8 @@ control_lme <- lmeControl(
   msMaxEval = 400,       # total evaluations
   returnObject = TRUE
 )
+
+# ADD: glsControl
 
 ### Model evaluation
 # AIC()
@@ -187,22 +190,6 @@ The recommendation for unbalanced data is to fit multivariate models only under 
 -> compound symmetry is valid but based on strong assumptions
 
 ###### Estimate model
-```{r}
-form_full = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 
-
-m_full <- lme(
-  fixed = form_full, # - 1: we could also remove the intercept: then no absolute, not relative to bl
-  random = ~ 1 | patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  #correlation = corSymm(form = ~ 1 | trial/patid),
-  method = "ML",
-  data = dat_long,
-  na.action = na.exclude#,
-  #   control = control_lme
-)
-
-summary(m_full)
-```
 
 ```{r}
 form_full = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 
@@ -226,12 +213,12 @@ We specify no correlation structure (default is uncorrelated).
 But we already allowe for variance heterogeneity by specifying the weights argument. As we discovered this already in the exploratory analysis.
 
 
+
 ```{r}
 # remove intercept
 
-m1 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ 1 | patid,
+m1 <- gls(
+  model = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
   #correlation = corSymm(form = ~ 1 | trial/patid),
   method = "ML",
@@ -241,7 +228,6 @@ m1 <- lme(
 
 summary(m1)
 ```
-
 
 ###### Examine the model fit
 ```{r}
@@ -255,7 +241,7 @@ head(vcov_fixed, n = 20)
 ```
 We can check out the covariance matrix for our fixed effects. 
 
-```{r}
+```{r MOVE DOWN TO COVARIANCE SECTION}
 # Residual covariance matrix per patient
 pat1 <- dat_long$patid == levels(dat_long$patid)[1]
 
@@ -265,14 +251,27 @@ resid_matrix
 getVarCov(m_full, individual = levels(dat_long$patid)[2])
 getVarCov(m_full, individual = levels(dat_long$patid)[3])
 
+# this shows us that the same var-covar is estimated for each subject
 
 ```
+
+
 In our current model, we have constant covariances that don't vary by patient
 
-```{r}
+```{r DELETE}
+mod2 <- m_full
+
 # random effect variance
-VarCorr(mod)
-VarCorr(mod)  # corr = T
+VarCorr(mod2)
+VarCorr(mod2)  # corr = T
+
+# for random effects model, this looks like this:
+# patid = pdLogChol(1) 
+#             Variance StdDev  
+# (Intercept) 3.229688 1.797133
+# Residual    3.971972 1.992981
+
+# function not available for gls
 
 ```
 
@@ -318,7 +317,7 @@ qqline(resid(mod, type = "p"))
 ```
 Looks nice and normal. We dont need any linear transformation of our outcome.
 
-```{r}
+```{r DELETE}
 mod <- m_full
 
 ## transform the random effects object a bit
@@ -389,6 +388,7 @@ q3_resid_vs_fitted_by_year <- plot(m_full, resid(., type = "p") ~ fitted(.) | as
 png("./../figures/q3_resid_vs_fitted_by_year.png")
 print(q3_resid_vs_fitted_by_year)
 dev.off()
+q3_resid_vs_fitted_by_year
 
 ```
 Apart from the dropout thats clearly visible, the errors dont look too dissimilar between years. That suggests that we could probably also go for a homoscedastic model.
@@ -400,10 +400,9 @@ However, we can see that the errors are more dense/spread out in certain years c
 ###### Compare with null model
 
 now lets check how useful our model is compared to the null model
-```{r eval=FALSE, include=FALSE}
-m0 <- lme(
-  fixed = bprs ~ 1,
-  random = ~ 1 | patid,
+```{r}
+m0 <- gls(
+  model = bprs ~ 1,
   weights = varIdent(form = ~ 1 | time.num),
   data = dat_long,
   method = "ML",
@@ -415,8 +414,10 @@ anova(m0, m_full)
 
 ###### Export results
 ```{r}
-length(m_full$coefficients$fixed)
-noquote(names(m_full$coefficients$fixed))  # add: print as latex table
+# length(m_full$coefficients$fixed)
+# noquote(names(m_full$coefficients$fixed))  # add: print as latex table
+length(m_full$coefficients)
+noquote(names(m_full$coefficients))  # add: print as latex table
 
 ```
 ```{r}
@@ -501,7 +502,7 @@ a13 <- anova(m1, m14)
 
 The strongest Likelihood Ratios are obtained for time, age and trial. 
 We only exclude inkomen and sex as predictors.
-*Update* We also exclude 
+*Update* We can also exclude 
 - edu
 - adl
 - taupet.0
@@ -517,6 +518,7 @@ bprs ~ time.num + age + trial + bmi + job + wzc + cdrsb.0
 Sidenote: 
 If we use the wide format data and do the same model selection but start with an OLS model as fitted with lm() and update it, we get different Likelihood Ratio Test results and different p values than with gls(). So this is probably due to the ignorance of the other outcomes in gls().
 
+
 ###### Export
 ```{r}
 
@@ -528,10 +530,12 @@ anovas_df <- lapply(anovas, function(x) {
     df
     })
 
-tab_anovas <- bind_rows(anovas_df, .id = "model")
+tab_anovas <- bind_rows(anovas_df)
+rownames(tab_anovas) <- NULL
+
 
 tab_anovas <- tab_anovas %>% 
-    select(-Model, -call,-m) %>% 
+    select(-Model, -call) %>% 
     relocate(model, .before = "df") %>%
     mutate(
 
@@ -540,7 +544,8 @@ tab_anovas <- tab_anovas %>%
     ) %>%
     select(-`p-value`)
 
-rownames(tab_anovas) <- NULL
+tab_anovas <- tab_anovas %>% 
+    filter((!is.na(L.Ratio) & !is.na(p.value.form)) | row_number()==1  )
 
 
 q3_tab_anovas_latex <- tab_anovas %>% 
@@ -551,26 +556,32 @@ q3_tab_anovas_latex <- tab_anovas %>%
                        ) %>%
     kable_styling(latex_options = c("hold_position"))# %>% 
     #save_kable("q3_anova_maineffects.tex")
-print(q3_tab_anovas_latex)
+# print(q3_tab_anovas_latex)
 
+```
+
+```{r}
+# remove objects not needed anymore
+rm(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13)
 ```
 
 
 ##### Interaction effects I
 Now lets see if some interactions are meaningful:
 ```{r}
-m_start <- m1
+
+m_prel <- m1
+m_prel_save <- m1 # backup model
 ```
 
-```{r}
-m1 <- m_start
+```{r DELETE}
+m1 <- m_prel
 
 # time * age
-m2 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
+m2 <- gls(
+  model = bprs ~ time.num * age + trial + bmi + job + wzc + cdrsb.0, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
+  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
   na.action = na.exclude,
@@ -578,27 +589,24 @@ m2 <- lme(
 )
 
 anova(m1, m2)
-m1 <- m2
 
 # time * age * trial
-m3 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
+m3 <- gls(
+  model = bprs ~ time.num  * trial + bmi + job + wzc + cdrsb.0, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
+  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
   na.action = na.exclude,
   control = control_lme
 )
-anova(m1, m3)  # the performance criteria give inconsistent results. lets not update the model, as we have to fit 23 additional pars
+anova(m1, m3)  # this model is way worse, and we have to fit > 20 additional pars
 
 # time * age * cdrsb.0
-m4 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
+m4 <- gls(
+  model = bprs ~ time.num * age * cdrsb.0 + trial + bmi + job + wzc, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
+  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
   na.action = na.exclude,
@@ -608,11 +616,10 @@ anova(m1, m4)
 # we could choose this model, but the Likelihood Ratio is not super large
 
 # time * age * wzc
-m5 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
+m5 <- gls(
+  model = bprs ~ time.num * age * wzc + trial + bmi + job + cdrsb.0, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
+  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
   na.action = na.exclude,
@@ -620,94 +627,38 @@ m5 <- lme(
 )
 anova(m1, m5)  # does not differ 
 
+# time * (trial + cdrsb.0)
+m5 <- gls(
+  model = bprs ~ time.num * (trial + cdrsb.0) + age + wzc + trial + bmi + job, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  # correlation = corSymm(form = ~ time.num | patid),
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude,
+  control = control_lme
+)
+anova(m1, m5)  # this seems like a nice tradeoff, with not too many additional parameters but improved fit
+
+
 # rm(m2, m3, m4, m5)
 
 ```
+
 The following interactions between time and other predictors seem plausible for our data.
 
-time.num * age
-
 Also possible:
-time.num * age * cdrsb.0 
+time.num * (trial + cdrsb.0)
 
 
-##### Interaction effects II
-What about other interactions?
-```{r}
-m_start <- m1
-```
-
-```{r}
-m1 <- m_start
-
-
-# m2 <- gls(
-#    bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 * taupet.0,
-#   method = "ML",
-#   data = dat_long,
-#   na.action = na.exclude
-# )
-# anova(m1, m2)  # interaction between the biomarkers fails to converge due to singularity
-# m1 <- m2
-
-# cdrsb.0 * abpet.0
-m3 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
-  method = "ML",
-  data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
-)
-anova(m1, m3) 
-
-# edu * job
-m4 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
-  method = "ML",
-  data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
-)
-anova(m1, m4) 
-
-# bmi * adl
-m5 <- lme(
-  fixed = ##### time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
-  method = "ML",
-  data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
-)
-anova(m1, m5) 
- 
-
-# rm(m2, m3, m4, m5)
-
-m.meanstr <- m1
-
-```
-
-No other interactions reach significance and seem plausible for the data.
 
 ##### Non-linear trends
 Now lets see if we can detect some non-linear trends
 ```{r eval=FALSE, include=FALSE}
-m1_save <- m1
 
-m6 <- lme(
-  fixed = ##### time.num + I(time_num^2) + age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
-  random = ~ 1 | patid,
+m6 <- gls(
+  model = ##### time.num + I(time_num^2) + age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | patid),
+  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
   na.action = na.exclude,
@@ -723,8 +674,21 @@ this does not work yet.
 
 Our current model looks like this: 
 
-bprs ~ time.num * age + trial + edu + bmi + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 
+bprs ~ time.num + age + trial + bmi + job + wzc + cdrsb.0
 
+lets now refit our model with REML, now that we have fixed the mean structure:
+```{r}
+form_fixed <- bprs ~ time.num + age + trial + bmi + job + wzc + cdrsb.0
+m1 <- gls(
+  model = form_fixed, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  # correlation = corSymm(form = ~ time.num | patid),
+  method = "REML",
+  data = dat_long,
+  na.action = na.exclude,
+  control = control_lme
+)
+```
 
 
 #### Selection of Covariance Structure
@@ -744,157 +708,156 @@ correlation structure is assumed to apply only to observations within the same g
 
 ##### M2
 ```{r}
-# ---- Model 2: with unstructured errors: every time point has own variance, 
-# and all year-pairs can have their own covariance 
-# without weights, without trial as nesting factor
 
-m2 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ 1 | patid,
+# ---- Model 2: without weights
+
+m2 <- gls(
+  model = form_fixed, 
   # weights = varIdent(form = ~ 1 | time.num),       # different variances per year, (corresponding SAS argument would be type = VC)
-  correlation = corSymm(form = ~ time.num | patid),
+  # correlation = corSymm(form = ~ time.num | patid),
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  # control = control_lme
 )
 
 summary(m2)
+anova(m1, m2)
 ```
 We tested if the model with weights is indeed better.
 Ok, we know fitting different variances per year does improve our model fit. Lets stick with this model.
+
 (..........)
 
 ##### M3
 ```{r}
-# with weights, without trial as nesting factor
+# ---- Model 3: with unstructured errors: every time point has own variance, 
+# and all year-pairs can have their own covariance 
+# with weights
 
-m3 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ 1 | patid,
+m3 <- gls(
+  model = form_fixed, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
   correlation = corSymm(form = ~ time.num | patid),
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  #control = control_lme
 )
 
 summary(m3)
+anova(m1, m3)
+m1 <- m3
 ```
+This improves our model, as expected. we keep the unstructured covariance.
+
+
 
 ##### M4
 ```{r}
-# with weights and trial as nesting factor
+# without weights but with unstructured corr?
 
-m4 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ 1 | trial/patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | trial/patid),
+m4 <- gls(
+  model = form_fixed, 
+  #weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  correlation = corSymm(form = ~ time.num | patid),
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  # control-argument
 )
 
 summary(m4)
+anova(m1, m4)
+
 ```
+
+Removing the weights is worse. We keep our model.
+
+Nested factor trial/patid --> this is not possible in the correlation matrix!!!
+Because we can only model WITHIN-patient correlations, while the nested structure of patients between different trials (and wanting to estimate how much patients of different trial centers differ) is obviously BETWEEN subjects correlation.
+
+Thus, we can ignore this in the multivariate model. This will only become significant for random effect estimation.
+
+```{r}
+# check out the variance
+m1$modelStruct$corStruct
+```
+The correlations dont really decrease that much with increasing lag. Although there is a small trend, but for lag(1,7) its again stronger than for lag(1,6) so we cant be sure. But errors become more correlated the later the time point is.
 
 ##### M5
 ```{r}
-# with random slopes for year
-# with weights and trial as nesting factor
+# with weights 
+# compound symmetry
 
-m5 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ time.num | trial/patid,
+m5 <- gls(
+  model = form_fixed, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corSymm(form = ~ time.num | trial/patid),
+  correlation = corCompSymm(form = ~ time.num | patid),   # compound symmetry within-subject correlation
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  # control-argument
 )
 
+
 summary(m5)
+anova(m1, m5)
 ```
+
+The model is worse. So no compound symmetry 
 
 ##### M6
 ```{r}
-# with random slopes for year
-# with weights and trial as nesting factor
+## ---- Model 6: Autoregressive: decreasing correlations with increasing time lag, stronger ones for adjancent lags
+# with weights 
 
-# compound symmetry
-
-m6 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ time.num | trial/patid,
+m6 <- gls(
+  model = form_fixed, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corCompSymm(form = ~ time.num | trial/patid),   # unstructured within-subject correlation
+  correlation = corAR1(form = ~ time.num | patid),   # identical to corCAR1, because time is numeric
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  # control-argument
 )
+
+
 
 summary(m6)
+anova(m1, m6)
 ```
 
-##### M7
-```{r}
-## ---- Model 5: Autoregressive: decreasing correlations with increasing time lag, stronger ones for adjancent lags
-# with random slopes for year
-# with weights and trial as nesting factor
+As we observed earlier, the corr decreases with more lag, but not consistently, for last time point its again stronger. So the AR1 strcture is not better.
 
-m7 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ time.num | trial/patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  correlation = corAR1(form = ~ time.num | trial/patid),   # 
-  method = "REML",
-  data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
-)
-
-summary(m7)
-```
-
-This throws a warning:
-
-Warning in logLik.reStruct(object, conLin) :
-  Singular precision matrix in level -2, block 3
-Warning in logLik.reStruct(object, conLin) :
-  Singular precision matrix in level -2, block 36
-
-Our model still be fitted albeit the singularity issues.
-However, the correlation matrix has identical values in all off-diagonal cells, while the covariance matrix shows distinct values. 
+#However, the correlation matrix has identical values in all off-diagonal cells, while the covariance matrix shows distinct values. 
 
 The covariance matrix indicates decreasing trends but in the last years increasing again -> explanation?
 
-##### M8
-```{r eval=FALSE, include=FALSE}
-# ---- Model 6: Toeplitz (ARMA(6,0)) ----
-# without weights, without trial as nesting factor
+##### M7
+```{r}
+# ---- Model 7: Toeplitz (ARMA(6,0)) ----
 
-m8 <- lme(
-  fixed = bprs ~ time.num + age + sex + trial + edu + bmi + inkomen + job + adl + wzc + cdrsb.0 + abpet.0 + taupet.0 - 1, 
-  random = ~ 1 | trial/patid,
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year     
-  correlation = corARMA(form = ~ time.num | trial/patid, p = 6, q = 0),
+m7 <- gls(
+  model = form_fixed, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  correlation = corARMA(form = ~ time.num | patid, p = 6, q = 0),
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  # control-argument
 )
 
-summary(m8)
-```
-This model does not fit. We get the following error message
 
-Fehler in `coef<-.corARMA`(`*tmp*`, value = value[parMap[, i]]) : 
-  Koeffizientenmatrix nicht invertierbar
+summary(m7)
+anova(m1, m7)
+```
+
+This model still has worse fit, but not that much worse.
+
+ARMA is a combination of AR und MA models
+AR = autoregressive model = dependency of time points on earlier time points
+MA = moving average, considers weighted averages of past errors
 
 ##### LRTs
 ```{r}
@@ -902,12 +865,26 @@ anova(m2, m3, m4, m5, m6, m7)
 ```
 We can compare the models because they have the same fixed effects, but different variance structures.
 
-The most parsimonious structure we can find is Model 6 -> compound symmetry.
+The most parsimonious structure we can find is the unstructured one. All more parsimonious ones don't reach the same model fit
 
-But autoregressive seems to be equally good.
+
+Model 6 -> compound symmetry is way worse
+
+But autoregressive and especially Toeplitz are a bit better.
 
 However, how appropriate are they in the case of our data?
-We have unbalanced data, lets not forget.
+
+If we take the equal time spacing seriously, this may not hold for our data in the context of a clinical trial:
+
+Because patients don’t come exactly at 12, 24, 36, … months.
+
+Example: Typical real-life patterns:
+Intended visit	Actual timestamp (months)
+0 years	        0.2
+1 year	        12.7
+2 years	        24.3
+3 years	        35.9
+4 years	        48.4
 
 *OLD NOTES*
 Model 2 with correlated (unstructured) errors improves fit -> We keep the model.
@@ -963,6 +940,7 @@ get_cov_matrix <- function(mod) {
   sigma0 <- mod$sigma
   sd_vars <- sigma0 * sqrt(var_pars)
   D <- diag(sd_vars)
+  C <- get_cor_matrix(mod)
   S <- D %*% C %*% D
   S <- round(S, 3)
   S
@@ -970,6 +948,17 @@ get_cov_matrix <- function(mod) {
 
 
 ```
+
+```{r}
+get_cor_matrix(m1)
+get_cov_matrix(m1)
+```
+Why AR(1) is not good enough for our model fit:
+SOme thoughts:
+- AR(1) works best with homogeneous data
+- it estimates a single corr parameter only
+- Lag-1 correlations are increasing over time, not constant. Also referred to as Stationarity assumption. that means that time points which are only 1 lag apart do NOT have the same correlation, but this is a requirement for AR(1): Corr(t,t+1)=ρ for all t. It makes sense for our data though that the measurements are noisier in the beginning.
+
 
 #### Robust estimation
 ```{r}
