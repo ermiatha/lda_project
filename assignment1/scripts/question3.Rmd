@@ -959,6 +959,18 @@ SOme thoughts:
 - it estimates a single corr parameter only
 - Lag-1 correlations are increasing over time, not constant. Also referred to as Stationarity assumption. that means that time points which are only 1 lag apart do NOT have the same correlation, but this is a requirement for AR(1): Corr(t,t+1)=ρ for all t. It makes sense for our data though that the measurements are noisier in the beginning.
 
+Reflecting on our assumption of equal time spacing:
+Even if study design says “measure every year,” patients don’t come exactly at 12, 24, 36, … months. -> this is unrealistic for our clinical data.
+
+Example: Typical real-life patterns:
+
+Intended visit	Actual timestamp (months)
+0 years	0.2
+1 year	12.7
+2 years	24.3
+3 years	35.9
+4 years	48.4
+
 
 #### Robust estimation
 ```{r}
@@ -970,7 +982,7 @@ SOme thoughts:
 
 ```{r}
 
-models <- list(m4, m5, m6, m7)
+models <- list(m5, m6, m7)
 
 lapply(models, get_cor_matrix)
 
