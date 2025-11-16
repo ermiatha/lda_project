@@ -311,13 +311,7 @@ getVarCov(m_full, individual = levels(dat_long$patid)[3])
 
 
 ```
-In our current model, we have constant covariances that don't vary by patient
 
-##########################################################################################################################################
-
-I'm not sure what you mean here. getVarCov returns the V matrix, which is one per model, not one per patient. 
-
-##########################################################################################################################################
 
 
 ```{r}
@@ -1313,6 +1307,7 @@ anova(m3,m5)
 ```
 
 It seems that a homoskedastic model is too simplistic for this data. 
+
 
 
 
