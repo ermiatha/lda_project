@@ -76,6 +76,63 @@ dat_long <- to_factor(dat_long)
 
 # EDA
 
+## Summary tables
+
+```{r}
+continuous_vars <- c(
+  "age", "bmi", "inkomen", "adl",
+  "bprs0", "cdrsb0", "abpet0", "taupet0"
+)
+
+baseline_continuous <- dat %>%
+  select(all_of(continuous_vars)) %>%
+  summarise(across(
+    everything(),
+    list(
+      N    = ~sum(!is.na(.)),
+      Mean = ~round(mean(., na.rm = TRUE), 2),
+      SD   = ~round(sd(., na.rm = TRUE), 2),
+      Min  = ~round(min(., na.rm = TRUE), 2),
+      Max  = ~round(max(., na.rm = TRUE), 2)
+    ),
+    .names = "{.col}_{.fn}"
+  )) %>%
+  pivot_longer(
+    everything(),
+    names_to   = c("Variable", ".value"),
+    names_sep  = "_"
+  ) %>%
+  arrange(Variable)
+
+baseline_continuous
+
+```
+
+```{r}
+
+categorical_vars <- c("sex", "edu", "job", "wzc")
+
+baseline_categorical <- lapply(categorical_vars, function(v) {
+  
+  df <- dat %>%
+    count(!!sym(v), name = "Frequency") %>%
+    mutate(
+      Percent              = round(Frequency / sum(Frequency) * 100, 2),
+      Cumulative_Frequency = cumsum(Frequency),
+    )
+  
+  df$Variable <- v
+  df %>% relocate(Variable)
+})
+
+baseline_categorical
+
+
+
+```
+
+
+
 ## Mean and SD of clinical variables as a function of time
 ```{r}
 plot_df <- dat_long %>%
@@ -669,26 +726,46 @@ ggplot(dat, aes(x = age_bin, y = inkomen, fill = age_bin)) +
 ## Overall dropout rate
 
 ```{r}
-non_na_counts <- dat %>%
-  summarise(across(starts_with("bprs"), ~ sum(!is.na(.x))))
 
-plot_data <- non_na_counts %>%
+# Convert to long format, keeping age_bin
+dat_long <- dat %>%
   pivot_longer(
-    cols = everything(),
+    cols = starts_with("bprs"),
     names_to = "measurement_occasion",
-    values_to = "count"
+    values_to = "bprs_value"
   ) %>%
-  mutate(year = as.numeric(gsub("bprs", "", measurement_occasion)))
+  mutate(
+    year = as.numeric(gsub("bprs", "", measurement_occasion))
+  )
 
-ggplot(plot_data, aes(x = year, y = count)) +
-  geom_col(fill = "steelblue", color = "black") + 
-  geom_text(aes(label = count), vjust = -0.5) + 
+# Count non-missing observations by year × age_bin
+plot_data <- dat_long %>%
+  filter(!is.na(bprs_value)) %>%
+  group_by(year, age_bin) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Total count per year (for top labels)
+totals <- plot_data %>%
+  group_by(year) %>%
+  summarise(total = sum(count))
+
+ggplot(plot_data, aes(x = factor(year), y = count, fill = age_bin)) +
+  geom_col(color = "black") +
+  geom_text(
+    data = totals,
+    aes(x = factor(year), y = total, label = total),
+    vjust = -0.5,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_brewer(palette = "Blues", name = "Age group") +
   theme_minimal() +
   labs(
     title = "Number of Available Observations at Each Time Point",
     x = "Year",
     y = "Number of available observations"
   )
+
+
 ```
 ## Correlation between dropout rate and age and bprs at baseline
 
