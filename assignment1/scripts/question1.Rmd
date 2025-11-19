@@ -727,20 +727,22 @@ ggplot(dat, aes(x = age_bin, y = inkomen, fill = age_bin)) +
 
 ```{r}
 
+dat2 <- dat
+
 # Convert to long format, keeping age_bin
-dat_long <- dat %>%
+dat_long2 <- dat2 %>%
   pivot_longer(
     cols = starts_with("bprs"),
     names_to = "measurement_occasion",
-    values_to = "bprs_value"
+    values_to = "bprs"
   ) %>%
   mutate(
     year = as.numeric(gsub("bprs", "", measurement_occasion))
   )
 
 # Count non-missing observations by year × age_bin
-plot_data <- dat_long %>%
-  filter(!is.na(bprs_value)) %>%
+plot_data <- dat_long2 %>%
+  filter(!is.na(bprs)) %>%
   group_by(year, age_bin) %>%
   summarise(count = n(), .groups = "drop")
 
