@@ -241,39 +241,7 @@ head(vcov_fixed, n = 20)
 ```
 We can check out the covariance matrix for our fixed effects. 
 
-```{r MOVE DOWN TO COVARIANCE SECTION}
-# Residual covariance matrix per patient
-pat1 <- dat_long$patid == levels(dat_long$patid)[1]
 
-resid_matrix <- getVarCov(m_full, individual = levels(dat_long$patid)[1])
-resid_matrix
-
-getVarCov(m_full, individual = levels(dat_long$patid)[2])
-getVarCov(m_full, individual = levels(dat_long$patid)[3])
-
-# this shows us that the same var-covar is estimated for each subject
-
-```
-
-
-In our current model, we have constant covariances that don't vary by patient
-
-```{r DELETE}
-mod2 <- m_full
-
-# random effect variance
-VarCorr(mod2)
-VarCorr(mod2)  # corr = T
-
-# for random effects model, this looks like this:
-# patid = pdLogChol(1) 
-#             Variance StdDev  
-# (Intercept) 3.229688 1.797133
-# Residual    3.971972 1.992981
-
-# function not available for gls
-
-```
 
 
 ####### Visualize the model fit 
@@ -317,39 +285,6 @@ qqline(resid(mod, type = "p"))
 ```
 Looks nice and normal. We dont need any linear transformation of our outcome.
 
-```{r DELETE}
-mod <- m_full
-
-## transform the random effects object a bit
-ranefs <- ranef(mod)
-
-dat_ranefs <- data.frame(patid = rownames(ranefs), intercept = ranefs[, "(Intercept)"])
-
-hist(dat_ranefs$intercept,
-     breaks = 20,
-     main = "Random intercepts by patient",
-     xlab = "Random intercept",
-     col = "grey",
-     border = "white")
-
-
-dotplot(sort(dat_ranefs$intercept),
-        main = "Random intercepts of patients",
-        xlab = "Random intercept")
-
-
-
-ggplot(dat_ranefs, aes(x = reorder(patid, intercept), y = intercept)) +
-  geom_point(color = "grey") +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  coord_flip() +  # horizontal for readability
-  theme_bw() +
-  labs(title = "Patient-level random intercepts",
-       x = "Patient ID",
-       y = "Random intercept")
-
-
-```
 
 Lets also visualize the residuals to check if our variance structure seems plausible:
 ```{r}
@@ -972,13 +907,6 @@ Intended visit	Actual timestamp (months)
 4 years	48.4
 
 
-#### Robust estimation
-```{r}
-# error: correct dataset to be used
-# coef_test(m_full, vcov = "CR2", cluster = na.exclude(dat_long$time))
-```
-
-
 
 ```{r}
 
@@ -1002,6 +930,27 @@ summary(m.covarstr)$sigma * weights
 
 ```{r}
 ### visualize the variances to find out
+```
+
+```{r MOVE DOWN TO COVARIANCE SECTION}
+# Residual covariance matrix per patient
+pat1 <- dat_long$patid == levels(dat_long$patid)[1]
+
+resid_matrix <- getVarCov(m_full, individual = levels(dat_long$patid)[1])
+resid_matrix
+
+getVarCov(m_full, individual = levels(dat_long$patid)[2])
+getVarCov(m_full, individual = levels(dat_long$patid)[3])
+
+# this shows us that the same var-covar is estimated for each subject
+
+```
+
+
+#### Robust estimation
+```{r}
+# error: correct dataset to be used
+# coef_test(m_full, vcov = "CR2", cluster = na.exclude(dat_long$time))
 ```
 
 
