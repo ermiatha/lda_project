@@ -19,6 +19,9 @@ library(nlme)
 library(data.table)
 library(broom)
 library(lattice)
+library(sjPlot)
+library(xtable)
+library(kableExtra)
 
 ```
 
@@ -374,7 +377,7 @@ xtable(summary(m_full)$tTable)
 
 ```{r}
 
-library(kableExtra)
+# library(kableExtra)
 
 # kbl(m_full, digits = 3, booktabs = T, escape = F, caption = "Test")
 
@@ -512,77 +515,118 @@ m_prel_save <- m1 # backup model
 ```{r DELETE}
 m1 <- m_prel
 
-# time * age
+
 m2 <- gls(
-  model = bprs ~ time.num * age + trial + bmi + job + wzc + cdrsb.0, 
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  # correlation = corSymm(form = ~ time.num | patid),
-  method = "ML",
-  data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+    model = bprs ~ time.num * age * cdrsb.0 * job + wzc + trial + bmi, 
+    weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+    method = "ML",
+    data = dat_long,
+    na.action = na.exclude
 )
+a1 <- anova(m1, m2)
+m1 <- m2
 
-anova(m1, m2)
-
-# time * age * trial
+# time * age * cdrsb.0  # delete this ? ##########
 m3 <- gls(
-  model = bprs ~ time.num  * trial + bmi + job + wzc + cdrsb.0, 
-  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  # correlation = corSymm(form = ~ time.num | patid),
-  method = "ML",
-  data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
-)
-anova(m1, m3)  # this model is way worse, and we have to fit > 20 additional pars
-
-# time * age * cdrsb.0
-m4 <- gls(
   model = bprs ~ time.num * age * cdrsb.0 + trial + bmi + job + wzc, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude
 )
-anova(m1, m4) 
-# we could choose this model, but the Likelihood Ratio is not super large
+a2 <- anova(m1, m3) 
 
-# time * age * wzc
-m5 <- gls(
-  model = bprs ~ time.num * age * wzc + trial + bmi + job + cdrsb.0, 
+# time * (age + cdrsb.0 + job)
+m4 <- gls(
+  model = bprs ~ time.num * (age + cdrsb.0 + job) + wzc + trial + bmi, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude
 )
-anova(m1, m5)  # does not differ 
+a3 <- anova(m1, m4)
 
-# time * (trial + cdrsb.0)
+
+
+# time * (job + cdrsb.0)
 m5 <- gls(
-  model = bprs ~ time.num * (trial + cdrsb.0) + age + wzc + trial + bmi + job, 
+  model = bprs ~ time.num * (job + cdrsb.0) + age + wzc + trial + bmi, 
   weights = varIdent(form = ~ 1 | time.num),       # different variances per year
-  # correlation = corSymm(form = ~ time.num | patid),
   method = "ML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude
 )
-anova(m1, m5)  # this seems like a nice tradeoff, with not too many additional parameters but improved fit
+a4 <- anova(m1, m5)  
 
+
+# time * cdrsb.0
+m6 <- gls(
+  model = bprs ~ time.num * cdrsb.0 +  age + trial + bmi + job + wzc, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+a5 <- anova(m1, m6) 
+
+
+# time * age
+m7 <- gls(
+  model = bprs ~ time.num * age + trial + bmi + job + wzc + cdrsb.0, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  method = "ML",
+  data = dat_long,
+  na.action = na.exclude
+)
+
+a6 <- anova(m1, m7)
 
 # rm(m2, m3, m4, m5)
 
 ```
 
-The following interactions between time and other predictors seem plausible for our data.
+XXX
 
-Also possible:
-time.num * (trial + cdrsb.0)
+###### Export
+```{r}
+
+anovas <- mget(paste0("a", seq(1:6)))
+
+anovas_df <- lapply(anovas, function(x) {
+    df <- as.data.frame(x)
+    df$model <- rownames(x)
+    df
+    })
+
+tab_anovas <- bind_rows(anovas_df)
+rownames(tab_anovas) <- NULL
+
+
+tab_anovas <- tab_anovas %>% 
+    select(-Model, -call) %>% 
+    relocate(model, .before = "df") %>%
+    mutate(
+
+        p.value.form = ifelse(`p-value` < .001, "< .001", sprintf("%.3f", tab_anovas$`p-value`)),
+        across(where(~is.numeric(.)), ~ round(., 2))
+    ) %>%
+    select(-`p-value`)
+
+tab_anovas <- tab_anovas %>% 
+    filter((!is.na(L.Ratio) & !is.na(p.value.form)) | row_number()==1  )
+
+
+q3_tab_anovas_ia_latex <- tab_anovas %>% 
+    kbl(format = "latex", 
+                   booktabs = TRUE, 
+                   caption = "Likelihood Ratio Tests used for model selection of main effects ",
+                   label = "tab:q3_anova_main_effects"
+                       ) %>%
+    kable_styling(latex_options = c("hold_position"))# %>% 
+    #save_kable("q3_anova_maineffects.tex")
+# print(q3_tab_anovas_latex)
+
+```
 
 
 
