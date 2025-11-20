@@ -218,5 +218,23 @@ library(patchwork)
 
 (p_beta0 | p_beta1)
 
+
+baseline_covariates <- dat2 %>%
+  group_by(patid) %>%
+  slice(1) %>%
+  select(patid, age, sex, trial, edu, bmi, inkomen, job, adl, wzc, cdrsb0, abpet0, taupet0) %>%
+  ungroup()
+
+# Merge the Stage 1 coefficients with the baseline covariates
+stage2_dat <- left_join(stage1_coefs_num, baseline_covariates, by = "patid")
+
+
+stage2_model <- lm(cbind(beta0, beta1) ~ age + sex + trial + edu + bmi + 
+                   inkomen + job + adl + wzc + cdrsb0 + abpet0 + taupet0, 
+                   data = stage2_dat)
+
+# 3. View Results
+summary(stage2_model)
+
 ```
 
