@@ -50,7 +50,7 @@ to_factor <- function(dat_long) {
             trial = as.factor(trial),
             job = as.factor(job),
             wzc = as.factor(wzc),
-            time_num = as.numeric(time)  # coded 1–7
+            time_num = as.numeric(as.character(time))  # coded 0–6
         )
     dat_long
 }
