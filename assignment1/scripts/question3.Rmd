@@ -538,11 +538,8 @@ m3 <- gls(
   data = dat_long,
   na.action = na.exclude
 )
-<<<<<<< HEAD
+
 a2 <- anova(m1, m3) 
-=======
-anova(m1, m3) 
->>>>>>> 53d1c07 (- add updated code for q3 to branch)
 
 # time * (age + cdrsb.0 + job)
 m4 <- gls(
@@ -552,11 +549,8 @@ m4 <- gls(
   data = dat_long,
   na.action = na.exclude
 )
-<<<<<<< HEAD
+
 a3 <- anova(m1, m4)
-=======
-anova(m1, m4)
->>>>>>> 53d1c07 (- add updated code for q3 to branch)
 
 
 
@@ -568,12 +562,8 @@ m5 <- gls(
   data = dat_long,
   na.action = na.exclude
 )
-<<<<<<< HEAD
-a4 <- anova(m1, m5)  
-=======
-anova(m1, m5)  
->>>>>>> 53d1c07 (- add updated code for q3 to branch)
 
+a4 <- anova(m1, m5)  
 
 # time * cdrsb.0
 m6 <- gls(
@@ -583,11 +573,8 @@ m6 <- gls(
   data = dat_long,
   na.action = na.exclude
 )
-<<<<<<< HEAD
+
 a5 <- anova(m1, m6) 
-=======
-anova(m1, m6) 
->>>>>>> 53d1c07 (- add updated code for q3 to branch)
 
 
 # time * age
@@ -599,11 +586,8 @@ m7 <- gls(
   na.action = na.exclude
 )
 
-<<<<<<< HEAD
+
 a6 <- anova(m1, m7)
-=======
-anova(m1, m7)
->>>>>>> 53d1c07 (- add updated code for q3 to branch)
 
 # rm(m2, m3, m4, m5)
 
