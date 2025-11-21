@@ -515,7 +515,7 @@ m_prel_save <- m1 # backup model
 ```{r DELETE}
 m1 <- m_prel
 
-
+# time * age * cdrsb0 * job
 m2 <- gls(
     model = bprs ~ time.num * age * cdrsb.0 * job + wzc + trial + bmi, 
     weights = varIdent(form = ~ 1 | time.num),       # different variances per year
@@ -523,11 +523,8 @@ m2 <- gls(
     data = dat_long,
     na.action = na.exclude
 )
-<<<<<<< HEAD
+
 a1 <- anova(m1, m2)
-=======
-anova(m1, m2)
->>>>>>> 53d1c07 (- add updated code for q3 to branch)
 m1 <- m2
 
 # time * age * cdrsb.0  # delete this ? ##########
@@ -672,8 +669,8 @@ m1 <- gls(
   # correlation = corSymm(form = ~ time.num | patid),
   method = "REML",
   data = dat_long,
-  na.action = na.exclude,
-  control = control_lme
+  na.action = na.exclude#,
+  # control = control_lme
 )
 ```
 
@@ -817,7 +814,7 @@ anova(m1, m6)
 
 As we observed earlier, the corr decreases with more lag, but not consistently, for last time point its again stronger. So the AR1 strcture is not better.
 
-#However, the correlation matrix has identical values in all off-diagonal cells, while the covariance matrix shows distinct values. 
+However, the correlation matrix has identical values in all off-diagonal cells, while the covariance matrix shows distinct values. 
 
 The covariance matrix indicates decreasing trends but in the last years increasing again -> explanation?
 
@@ -900,6 +897,11 @@ Summarising the conclusions on variance & covariance structure:
 
 
 
+```{r}
+form_fixed <- bprs ~ time.num * age * cdrsb.0 * job + wzc + trial + bmi
+```
+
+
 ##### Examine (co)variance matrices
 Now lets build the correlation and the covariance matrix:
 ```{r}
@@ -962,7 +964,7 @@ Intended visit	Actual timestamp (months)
 
 ```{r}
 
-models <- list(m5, m6, m7)
+models <- list(m3, m5, m6, m7)
 
 lapply(models, get_cor_matrix)
 
@@ -996,6 +998,60 @@ getVarCov(m_full, individual = levels(dat_long$patid)[3])
 
 # this shows us that the same var-covar is estimated for each subject
 
+```
+
+##### Fitting final model
+```{r}
+form_fixed <-  bprs ~ time.num * age * cdrsb.0 * job + wzc + trial + bmi
+m_final_arma <- gls(
+  model = form_fixed, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  correlation = corARMA(form = ~ time.num | patid, p = 6, q = 0),
+  method = "REML",
+  data = dat_long,
+  na.action = na.exclude#,
+  # control-argument
+)
+```
+
+
+```{r}
+m_final_unstr <- gls(
+  model = form_fixed, 
+  weights = varIdent(form = ~ 1 | time.num),       # different variances per year
+  correlation = corSymm(form = ~ time.num | patid),
+  method = "REML",
+  data = dat_long,
+  na.action = na.exclude#,
+  # control-argument
+)
+```
+
+#### Export final model results
+```{r}
+m_final <- m_final_unstr
+# length(m_full$coefficients$fixed)
+# noquote(names(m_full$coefficients$fixed))  # add: print as latex table
+length(m_final$coefficients)
+noquote(names(m_final$coefficients))  # add: print as latex table
+
+```
+
+```{r}
+
+
+# fit table in html
+tab_model(m_final,
+          file = "model.html",
+          show.r2 = TRUE,
+          show.se = TRUE
+          # dv.labels = "Response",
+          # pred.labels = c("Intercept", "X variable", "Z variable")
+          )
+
+
+# fit table in latex
+xtable(summary(m_final)$tTable)
 ```
 
 
