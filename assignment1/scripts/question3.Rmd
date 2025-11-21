@@ -688,6 +688,8 @@ m1 <- gls(
   na.action = na.exclude,
   control = control_lme
 )
+
+summary(m1)
 ```
 
 
