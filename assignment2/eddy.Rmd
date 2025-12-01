@@ -16,7 +16,8 @@ required_packages <- c(
   "geepack",   # For GEE models
   "lme4",      # For GLMMs
   "emmeans",   # For predicted probabilities (LSMeans)
-  "broom"      # For tidying model output
+  "broom",     # For tidying model output
+  "here"       # For setting correct path
 )
 
 # 2. Loop through the list: Check -> Install (if needed) -> Load
@@ -34,9 +35,12 @@ message("All required packages are installed and loaded.")
 
 
 ```{r}
+
 # 0. Load Data
+setwd("./data")
+alz_wide <- read_sas("alzheimer25.sas7bdat")
 # Assuming the SAS dataset is saved locally
-alz_wide <- read_sas("Data/alzheimer25.sas7bdat")
+# alz_wide <- read_sas("Data/alzheimer25.sas7bdat")
 
 # 1. Construct long-format dataset
 alz_long2 <- alz_wide %>%
