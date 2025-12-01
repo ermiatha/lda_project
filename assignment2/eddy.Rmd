@@ -37,7 +37,7 @@ message("All required packages are installed and loaded.")
 ```{r}
 
 # 0. Load Data
-setwd("./data")
+setwd("./dataset")
 alz_wide <- read_sas("alzheimer25.sas7bdat")
 # Assuming the SAS dataset is saved locally
 # alz_wide <- read_sas("Data/alzheimer25.sas7bdat")
