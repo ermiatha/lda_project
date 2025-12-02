@@ -39,14 +39,18 @@ message("All required packages are installed and loaded.")
 ```{r}
 # 0. Load Data
 # Assuming the SAS dataset is saved locally
-alz_wide <- read_sas("Data/alzheimer25.sas7bdat")
+alz_wide <- read_sas("./dataset/alzheimer25.sas7bdat")
 
 
 # 1. Construct long-format dataset
 alz_long2 <- alz_wide %>%
+    mutate(
+        abpet_0 = abpet0,
+        taupet_0 = taupet0
+    ) %>%
   # Convert wide to long using regex to capture variable name and time
   pivot_longer(
-    cols = matches("(bprs|cdrsb)[0-6]"),
+    cols = matches("(bprs|cdrsb|abpet|taupet)[0-6]"),
     names_to = c(".value", "time"),
     names_pattern = "(.*)(\\d+)" 
   ) %>%
@@ -54,12 +58,13 @@ alz_long2 <- alz_wide %>%
     time = as.numeric(time),
     # Convert key categorical variables to factors immediately
     patid = as.factor(patid),
-    sex = as.factor(sex), 
-    trial = as.factor(trial)
-  ) %>%
+    sex = as.factor(sex),
+    abpet0 = abpet_0,
+    taupet0 = taupet_0
+    ) %>%
   # Keep specific columns (dplyr::select)
   select(patid, trial, sex, age, edu, bmi, inkomen, job, adl, wzc,
-         abpet0, taupet0, time, BPRS = bprs, CDRSB = cdrsb)
+         abpet0, taupet0, abpet, taupet, time, BPRS = bprs, CDRSB = cdrsb)
 
 # View structure
 str(alz_long2)
