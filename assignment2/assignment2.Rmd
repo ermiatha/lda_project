@@ -193,6 +193,17 @@ gee_full <- geeglm(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet0 + taupet
 summary(gee_full)
 exp(coef(gee_full)) # ORs
 
+# 5.2b Full GEE model with timevarying biomarkers: Exchangeable
+gee_full_fullvars <- geeglm(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet + taupet,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+
+summary(gee_full_fullvars)
+exp(coef(gee_full_fullvars)) # ORs
+
+
 ```
 ## Sensitivity analysis (investigate potential impact of MNAR)
 ```{r}
@@ -292,6 +303,36 @@ gee_mult_fullvars <- geeglm(CDRSBbin ~ time_num * ( adl + abpet + taupet) + age 
                    corstr = "exchangeable")
 summary(gee_mult_fullvars)
 exp(coef(gee_mult_fullvars))
+
+# 5.5 Full GEE model with only taupet Interaction (Exchangeable)
+gee_mult_taupet <- geeglm(CDRSBbin ~ time_num * taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_mult_taupet)
+exp(coef(gee_mult_taupet))
+```
+```{r}
+# 5.6 Qaudratic time effects? 
+## Full GEE model (Exchangeable)
+gee_quadr <- geeglm(CDRSBbin ~ time_num + I(time_num^2) + taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_quadr)
+exp(coef(gee_quadr))
+
+# 5.6 Qaudratic time effects? 
+## Full GEE model (Exchangeable)
+gee_mult_quadr <- geeglm(CDRSBbin ~ time_num + I(time_num^2) * taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_mult_quadr)
+exp(coef(gee_mult_quadr))
 ```
 
 
