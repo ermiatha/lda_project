@@ -1,0 +1,477 @@
+---
+title: "Assignment 2"
+output: html_document
+---
+
+Load the prerequisites 
+```{r include=FALSE}
+# -------------------------------------------------------------------------
+# 0. Robust Package Installation and Loading
+# -------------------------------------------------------------------------
+
+# 1. Define the list of packages needed for the analysis
+required_packages <- c(
+  "tidyverse", # For data manipulation and plotting
+  "haven",     # To read SAS data
+  "geepack",   # For GEE models
+  "lme4",      # For GLMMs
+  "emmeans",   # For predicted probabilities (LSMeans)
+  "broom",
+  "mice" 
+)
+
+# 2. Loop through the list: Check -> Install (if needed) -> Load
+for (pkg in required_packages) {
+  # require() returns TRUE if installed, FALSE if not
+  if (!require(pkg, character.only = TRUE)) { 
+    message(paste("Installing missing package:", pkg))
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+message("All required packages are installed and loaded.")
+```
+
+
+```{r}
+# 0. Load Data
+# Assuming the SAS dataset is saved locally
+alz_wide <- read_sas("Data/alzheimer25.sas7bdat")
+
+
+# 1. Construct long-format dataset
+alz_long2 <- alz_wide %>%
+  # Convert wide to long using regex to capture variable name and time
+  pivot_longer(
+    cols = matches("(bprs|cdrsb)[0-6]"),
+    names_to = c(".value", "time"),
+    names_pattern = "(.*)(\\d+)" 
+  ) %>%
+  mutate(
+    time = as.numeric(time),
+    # Convert key categorical variables to factors immediately
+    patid = as.factor(patid),
+    sex = as.factor(sex), 
+    trial = as.factor(trial)
+  ) %>%
+  # Keep specific columns (dplyr::select)
+  select(patid, trial, sex, age, edu, bmi, inkomen, job, adl, wzc,
+         abpet0, taupet0, time, BPRS = bprs, CDRSB = cdrsb)
+
+# View structure
+str(alz_long2)
+```
+# alz_long_all with taupet, abpet etc 
+```{r}
+# 1. Construct long-format dataset
+alz_long_all <- alz_wide %>%
+  # Convert wide to long using regex to capture variable name and time
+  pivot_longer(
+    cols = matches("(bprs|cdrsb|abpet|taupet)[0-6]"),
+    names_to = c(".value", "time"),
+    names_pattern = "(.*)(\\d+)" 
+  ) %>%
+  mutate(
+    time = as.numeric(time),
+    # Convert key categorical variables to factors immediately
+    patid = as.factor(patid),
+    sex = as.factor(sex), 
+    trial = as.factor(trial)
+  ) %>%
+  # Keep specific columns (dplyr::select)
+  select(patid, trial, sex, age, edu, bmi, inkomen, job, adl, wzc,
+         ABPET = abpet, TAUPET = taupet, time, BPRS = bprs, CDRSB = cdrsb)
+
+
+
+# Create binary outcome for long data
+alz_long_all_bin <- alz_long_all %>%
+  # Drop missing outcomes
+  # Binary outcome: 1 = severe (>10), 0 = non-severe
+  mutate(
+    CDRSBbin = ifelse(CDRSB > 10, 1, 0),
+  )
+
+```
+
+
+
+Explore Missingness
+```{r}
+# 2.1 Create missingness indicator
+alz_long2_miss <- alz_long2 %>%
+  mutate(missing_cdrsb = ifelse(is.na(CDRSB), 1, 0))
+
+# 2.2 Frequency table (Time * Missing)
+table(alz_long2_miss$time, alz_long2_miss$missing_cdrsb)
+
+# 2.3 Proportion missing per time
+miss_summary <- alz_long2_miss %>%
+  group_by(time) %>%
+  summarise(prop_missing = mean(missing_cdrsb))
+
+# Plot: Proportion missing
+ggplot(miss_summary, aes(x = time, y = prop_missing)) +
+  geom_col(fill = "steelblue") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(title = "Proportion of missing CDRSB by visit year",
+       y = "Proportion missing CDRSB", x = "Visit year") +
+  theme_minimal()
+```
+
+
+Create binary outcome
+```{r}
+# Create binary outcome for long data
+alz_long2_bin <- alz_long2 %>%
+  # Drop missing outcomes
+  # Binary outcome: 1 = severe (>10), 0 = non-severe
+  mutate(
+    CDRSBbin = ifelse(CDRSB > 10, 1, 0),
+    time_num = time # time is already numeric from step 1
+  )
+
+# Now for wide data 
+alz_wide_bin <- alz_wide %>%
+  mutate(
+    across(starts_with("cdrsb"), ~ifelse(. > 10, 1, 0)),
+  )
+# Check distribution
+table(alz_long2_bin$CDRSBbin, alz_long2_bin$time_num)
+```
+
+
+Descriptive plot
+```{r}
+# 4.1 Compute proportion severe
+prop_severe <- alz_long2_bin %>%
+  group_by(time_num) %>%
+  summarise(prop_1 = mean(CDRSBbin))
+
+# 4.2 Plot
+ggplot(prop_severe, aes(x = time_num, y = prop_1)) +
+  geom_col(fill = "darkred") +
+  geom_text(aes(label = scales::percent(prop_1, accuracy = 0.1)), vjust = -0.5) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(title = "Proportion of severe CDRSB (CDRSBbin=1 ; >10) by visit year",
+       y = "Proportion with CDRSBbin = 1", x = "Visit year") +
+  theme_minimal()
+```
+
+
+Marginal models
+```{r}
+# 5.1 Base GEE model: Exchangeable correlation
+gee_base <- geeglm(CDRSBbin ~ time_num + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+
+summary(gee_base)
+
+# Calculate Odds Ratios (Exponentiate coefficients)
+exp(coef(gee_base))
+
+
+# 5.2 Full GEE model: Exchangeable
+gee_full <- geeglm(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet0 + taupet0,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+
+summary(gee_full)
+exp(coef(gee_full)) # ORs
+
+```
+Sensitivity analysis 
+```{r}
+# Assuming we want to impute 'cdrsb' at different time points (cdrsb1, cdrsb2, etc.)
+cols_to_keep <- c("trial","age", "sex", "bmi","adl", "abpet0", "taupet0", paste0("cdrsb", 0:6))
+wide_data <- alz_wide_bin[, cols_to_keep]
+
+# Ensure categorical variables are factors
+wide_data$trial <- as.factor(wide_data$trial) 
+
+# --- 2. Shift Adjustment (Sensitivity Analysis) ---
+# SAS Equivalent: mnar adjust (diff12 / shift=10 adjustobs=(treat='2'));
+# Scenario: What if patients in trial group '1' (or '2') had worse outcomes than predicted?
+
+# a. Perform standard imputation first (MAR assumption)
+# We impute cdrsb1-cdrsb6. cdrsb0 is baseline (usually complete).
+imp <- mice(wide_data, m = 10, method = "pmm", seed = 12345, printFlag = FALSE)
+
+# b. Apply shift to imputed values
+# Let's say we want to add a shift of 2 units to 'cdrsb6' for the treatment group '1'
+# This simulates a scenario where dropouts in the treatment group were actually worse off.
+
+imp_shifted <- imp
+long_completed_data <- complete(imp, action = "long", include = TRUE)
+
+# Define the shift
+shift_value <- 2
+target_group <- 1 # Assuming '1' is the treatment group of interest
+target_var <- "cdrsb6"
+
+# Apply shift ONLY to imputed values (where .imp > 0) for the specific group
+is_missing <- is.na(wide_data[[target_var]])
+# We need to map this missingness mask to the long format. 
+# Since 'complete' stacks datasets, the row order is preserved per imputation.
+n <- nrow(wide_data)
+missing_mask <- rep(is_missing, times = (imp$m + 1)) # +1 for original data
+
+# Apply logic: If it was missing AND it's the target group -> add shift
+condition <- missing_mask & (long_completed_data$trial == target_group) & (long_completed_data$.imp > 0)
+
+long_completed_data[[target_var]][condition] <- long_completed_data[[target_var]][condition] + shift_value
+
+imp_shifted_mids <- as.mids(long_completed_data)
+
+# c. Analyze the shifted data
+# This model analyzes the outcome at the last time point (cdrsb6).
+fit_shifted_long <- with(imp_shifted_mids, {
+  # 1. Convert to long format within the 'with' call
+  long_dat <- alz_wide_bin %>%
+    pivot_longer(
+      cols = matches("cdrsb[0-6]"),
+      names_to = "time_var",
+      values_to = "CDRSB_score",
+      names_pattern = "cdrsb(\\d+)"
+    ) %>%
+    mutate(
+      time = as.numeric(time_var),
+    )
+  
+  # 2. Run GEE on the long data
+  geeglm(cdrsb6 ~ time + age + sex + bmi + adl + abpet0 + taupet0,
+         id = patid,
+         data = long_dat,
+         family = binomial,
+         corstr = "exchangeable")
+})
+
+pooled_shifted_long <- pool(fit_shifted_long)
+print(summary(pooled_shifted_long))
+
+long_dat = complete(imp_shifted_mids, action = "long")
+fit_shifted <- with(imp_shifted_mids, geeglm(cdrsb6 ~ age + sex + bmi + adl + abpet0 + taupet0,
+                   id = patid,
+                   data = imp_shifted_mids["data"],
+                   family = binomial,
+                   corstr = "exchangeable"))
+pooled_shifted <- pool(fit_shifted)
+print(summary(pooled_shifted))
+```
+
+
+Random effects models
+```{r}
+# 6.1 Base GLMM
+glmm_base <- glmer(CDRSBbin ~ time_num + age + sex + bmi + (1 | patid),
+                   data = alz_long2_bin,
+                   family = binomial(link = "logit"),
+                   nAGQ = 1) # Laplace approximation
+
+summary(glmm_base)
+
+
+# 6.2 Full GLMM
+glmm_full <- glmer(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet0 + taupet0 + (1 | patid),
+                   data = alz_long2_bin,
+                   family = binomial(link = "logit"),
+                   nAGQ = 1)
+
+summary(glmm_full)
+```
+
+
+
+
+# Random effects structure check
+
+```{r}
+
+
+# Create a copy of your data to avoid overwriting the original
+alz_long_scaled <- alz_long_all_bin
+
+# --- Step 1: Rescale and Center Continuous Predictors ---
+# We apply the scale() function to each continuous predictor.
+# Note: We do not scale the outcome 'CDRSBbin', the grouping variable 'patid',
+# or categorical predictors like 'sex'.
+vars_to_scale <- c("time", "age", "bmi", "adl", "ABPET", "TAUPET", "BPRS")
+alz_long_scaled[vars_to_scale] <- lapply(alz_long_scaled[vars_to_scale], scale)
+
+
+```
+
+```{r}
+# Model 1: Random intercept and slope for patid nested within trial
+model1 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + (time | trial/patid),
+                data = alz_long_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+# Model 2: Random intercept and slope for patid, one random intercept for trial
+model2 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + (time | patid) + (1 | trial),
+                data = alz_long_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+# Model 3: A random intercept for patid, a random intercept for trial
+model3 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + (1 | patid) + (1 | trial),
+                data = alz_long_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+# Model 4: A random intercept and slope for patid, no random effects for trial
+model4 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + (time | patid),
+                data = alz_long_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+# Model 5: A random intercept and slope for patid, no random effects for trial
+model5 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + (1 | patid),
+                data = alz_long_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+# Create a list of the models
+models <- list(model1, model2, model3, model4, model5)
+
+# Set names for the models for easier identification
+model_names <- c(
+  "Random Intercept & Slope for trial/patid",
+  "Random Intercept & Slope for patid + Random Intercept for trial",
+  "Random Intercept for patid + Random Intercept for trial",
+  "Random Intercept & Slope for patid", 
+  "Random Intercept for patid"
+)
+
+# Create a data frame to store the results
+comparison_table <- data.frame(
+  Model = model_names,
+  AIC = sapply(models, AIC),
+  BIC = sapply(models, BIC)
+)
+
+# Print the comparison table
+print(comparison_table)
+```
+```{r}
+summary(model4)
+```
+
+
+# Number of ADQ points check 
+
+```{r}
+# Define the nAGQ values to test
+nAGQ_values <- c(1, 10, 25, 50)
+
+# Create an empty list to store the results
+results_list <- list()
+
+# Loop through the nAGQ values
+for (n in nAGQ_values) {
+  # Fit the glmer model
+  model <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + (1 | patid),
+                 data = alz_long_scaled,
+                 family = binomial(link = "logit"),
+                 nAGQ = n,
+                 control = glmerControl(optimizer = "bobyqa"))
+  
+  # Extract the coefficients and standard errors
+  coeffs <- summary(model)$coefficients
+  
+  # Store the results in the list
+  results_list[[as.character(n)]] <- coeffs
+}
+
+# Combine the results into a single table
+# Get the coefficient names from the first model
+all_coeffs <- rownames(results_list[['1']])
+
+# Create a final results table
+final_results <- data.frame(row.names = all_coeffs)
+
+# Populate the table with estimates and standard errors from each model
+for (n in as.character(nAGQ_values)) {
+  final_results[paste0("Est_nAGQ", n)] <- results_list[[n]][, "Estimate"]
+  final_results[paste0("SE_nAGQ", n)] <- results_list[[n]][, "Std. Error"]
+}
+
+# Print the final results table
+print(final_results)
+```
+
+
+
+Empirical BE Random Intercepts
+```{r}
+# 7.1 Extract Random Effects
+re_df <- ranef(glmm_full)$patid
+names(re_df) <- "EB_Intercept"
+re_df$patid <- rownames(re_df) # Make ID a column
+
+# 7.2 Distribution Histograms and QQ Plots
+# Histogram
+ggplot(re_df, aes(x = EB_Intercept)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "lightgrey", color = "black") +
+  stat_function(fun = dnorm, args = list(mean = mean(re_df$EB_Intercept), sd = sd(re_df$EB_Intercept)), color = "red") +
+  labs(title = "Empirical Bayes random intercepts (GLMM)") +
+  theme_minimal()
+
+# QQ Plot
+ggplot(re_df, aes(sample = EB_Intercept)) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title = "QQ Plot of Random Intercepts")
+
+
+# 7.3 Relationship between EB intercept and Baseline Age
+# Merge random effects back with baseline data (time == 0)
+baseline_data <- alz_long2_bin %>%
+  filter(time_num == 0) %>%
+  select(patid, age)
+
+eb_merged <- left_join(re_df, baseline_data, by = "patid")
+
+# Scatter plot with Loess
+ggplot(eb_merged, aes(x = age, y = EB_Intercept)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  labs(y = "EB random intercept (log-odds)", x = "Age at baseline",
+       title = "EB random intercepts vs Age") +
+  theme_minimal()
+```
+
+
+Predicted probabilities 
+```{r}
+# Calculate predicted probabilities (response scale)
+pred_probs <- emmeans(glmm_full, ~ time_num, type = "response",
+                      at = list(time_num = 0:6)) %>%
+              as.data.frame()
+
+# Plot
+ggplot(pred_probs, aes(x = time_num, y = prob)) +
+  geom_line() +
+  geom_point() +
+  geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL), alpha = 0.2) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x = "Years since baseline", y = "Predicted probability of CDRSBbin = 1",
+       title = "Subject-specific predicted probability over time") +
+  theme_minimal()
+```
+
+
+
+
