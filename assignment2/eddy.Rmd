@@ -44,9 +44,13 @@ alz_wide <- read_sas("alzheimer25.sas7bdat")
 
 # 1. Construct long-format dataset
 alz_long2 <- alz_wide %>%
+    mutate(
+        abpet_0 = abpet0,
+        taupet_0 = taupet0
+    ) %>%
   # Convert wide to long using regex to capture variable name and time
   pivot_longer(
-    cols = matches("(bprs|cdrsb)[0-6]"),
+    cols = matches("(bprs|cdrsb|abpet|taupet)[0-6]"),
     names_to = c(".value", "time"),
     names_pattern = "(.*)(\\d+)" 
   ) %>%
@@ -54,11 +58,13 @@ alz_long2 <- alz_wide %>%
     time = as.numeric(time),
     # Convert key categorical variables to factors immediately
     patid = as.factor(patid),
-    sex = as.factor(sex) 
-  ) %>%
+    sex = as.factor(sex),
+    abpet0 = abpet_0,
+    taupet0 = taupet_0
+    ) %>%
   # Keep specific columns (dplyr::select)
   select(patid, trial, sex, age, edu, bmi, inkomen, job, adl, wzc,
-         abpet0, taupet0, time, BPRS = bprs, CDRSB = cdrsb)
+         abpet0, taupet0, abpet, taupet, time, BPRS = bprs, CDRSB = cdrsb)
 
 # View structure
 str(alz_long2)
@@ -123,7 +129,8 @@ ggplot(prop_severe, aes(x = time_num, y = prop_1)) +
 ```
 
 
-Marginal models
+# Marginal models
+## Additive Model and Working Correlation Structure
 ```{r}
 # 5.1 Base GEE model: Exchangeable correlation
 gee_base <- geeglm(CDRSBbin ~ time_num + age + sex + bmi,
@@ -159,8 +166,7 @@ gee_ar1 <- geeglm(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet0 + taupet0
 summary(gee_ar1)
 ```
 
-
-Random effects models
+# Random effects models
 ```{r}
 # 6.1 Base GLMM
 glmm_base <- glmer(CDRSBbin ~ time_num + age + sex + bmi + (1 | patid),
@@ -238,7 +244,5 @@ ggplot(pred_probs, aes(x = time_num, y = prob)) +
        title = "Subject-specific predicted probability over time") +
   theme_minimal()
 ```
-
-
 
 
