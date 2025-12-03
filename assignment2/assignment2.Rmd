@@ -39,14 +39,18 @@ message("All required packages are installed and loaded.")
 ```{r}
 # 0. Load Data
 # Assuming the SAS dataset is saved locally
-alz_wide <- read_sas("Data/alzheimer25.sas7bdat")
+alz_wide <- read_sas("./dataset/alzheimer25.sas7bdat")
 
 
 # 1. Construct long-format dataset
 alz_long2 <- alz_wide %>%
+    mutate(
+        abpet_0 = abpet0,
+        taupet_0 = taupet0
+    ) %>%
   # Convert wide to long using regex to capture variable name and time
   pivot_longer(
-    cols = matches("(bprs|cdrsb)[0-6]"),
+    cols = matches("(bprs|cdrsb|abpet|taupet)[0-6]"),
     names_to = c(".value", "time"),
     names_pattern = "(.*)(\\d+)" 
   ) %>%
@@ -54,12 +58,13 @@ alz_long2 <- alz_wide %>%
     time = as.numeric(time),
     # Convert key categorical variables to factors immediately
     patid = as.factor(patid),
-    sex = as.factor(sex), 
-    trial = as.factor(trial)
-  ) %>%
+    sex = as.factor(sex),
+    abpet0 = abpet_0,
+    taupet0 = taupet_0
+    ) %>%
   # Keep specific columns (dplyr::select)
   select(patid, trial, sex, age, edu, bmi, inkomen, job, adl, wzc,
-         abpet0, taupet0, time, BPRS = bprs, CDRSB = cdrsb)
+         abpet0, taupet0, abpet, taupet, time, BPRS = bprs, CDRSB = cdrsb)
 
 # View structure
 str(alz_long2)
@@ -172,7 +177,8 @@ ggplot(prop_severe, aes(x = time_num, y = prop_1)) +
 ```
 
 
-Marginal models
+# Marginal models
+## Additive Models + find best working correlation structure
 ```{r}
 # 5.1 Base GEE model: Exchangeable correlation
 gee_base <- geeglm(CDRSBbin ~ time_num + age + sex + bmi,
@@ -197,8 +203,19 @@ gee_full <- geeglm(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet0 + taupet
 summary(gee_full)
 exp(coef(gee_full)) # ORs
 
+# 5.2b Full GEE model with timevarying biomarkers: Exchangeable
+gee_full_fullvars <- geeglm(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet + taupet,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+
+summary(gee_full_fullvars)
+exp(coef(gee_full_fullvars)) # ORs
+
+
 ```
-Sensitivity analysis 
+## Sensitivity analysis (investigate potential impact of MNAR)
 ```{r}
 # Assuming we want to impute 'cdrsb' at different time points (cdrsb1, cdrsb2, etc.)
 cols_to_keep <- c("trial","age", "sex", "bmi","adl", "abpet0", "taupet0", paste0("cdrsb", 0:6))
@@ -277,8 +294,71 @@ pooled_shifted <- pool(fit_shifted)
 print(summary(pooled_shifted))
 ```
 
+## Multiplicative Model
+```{r}
+# 5.4 Full GEE model with Interactions (Exchangeable)
+gee_mult <- geeglm(CDRSBbin ~ time_num * ( adl + abpet0 + taupet0) + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_mult)
+exp(coef(gee_mult))
 
-Random effects models
+# 5.4 Full GEE model with Interactions (Exchangeable)
+gee_mult_fullvars <- geeglm(CDRSBbin ~ time_num * ( adl + abpet + taupet) + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_mult_fullvars)
+exp(coef(gee_mult_fullvars))
+
+# 5.5 Full GEE model with only taupet Interaction (Exchangeable)
+gee_mult_taupet <- geeglm(CDRSBbin ~ time_num * taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_mult_taupet)
+exp(coef(gee_mult_taupet))
+```
+```{r}
+# 5.6 Qaudratic time effects? 
+## Full GEE model (Exchangeable)
+gee_quadr <- geeglm(CDRSBbin ~ time_num + I(time_num^2) + taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_quadr)
+exp(coef(gee_quadr))
+
+# 5.6 Qaudratic time effects? 
+## Full GEE model (Exchangeable)
+gee_mult_quadr <- geeglm(CDRSBbin ~ time_num + I(time_num^2) * taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   data = alz_long2_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(gee_mult_quadr)
+exp(coef(gee_mult_quadr))
+```
+
+
+lets look at the data without excluding missing outcomes
+```{r}
+alz_long3_bin <- alz_long2 %>%
+  # Binary outcome: 1 = severe (>10), 0 = non-severe
+  mutate(
+    CDRSBbin = ifelse(CDRSB > 10, 1, 0),
+    time_num = time # time is already numeric from step 1
+  )
+
+```
+
+
+# Random effects models
 ```{r}
 # 6.1 Base GLMM
 glmm_base <- glmer(CDRSBbin ~ time_num + age + sex + bmi + (1 | patid),
