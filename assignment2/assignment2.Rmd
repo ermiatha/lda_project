@@ -406,7 +406,7 @@ model4 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + BPRS 
                 nAGQ = 1,
                 control = glmerControl(optimizer = "bobyqa"))
 
-# Model 5: A random intercept and slope for patid, no random effects for trial
+# Model 5: A random intercept for patid
 model5 <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET + TAUPET + BPRS + (1 | patid),
                 data = alz_long_scaled,
                 family = binomial(link = "logit"),
@@ -488,7 +488,7 @@ print(final_results)
 ## Base model
 ```{r}
 # 6.1 Base GLMM
-glmm_base <- glmer(CDRSBbin ~ time + age + sex + bmi + (1 | patid),
+glmm_base <- glmer(CDRSBbin ~ time + age + sex + bmi + (time | patid),
                    data = alz_long_scaled,
                    family = binomial(link = "logit"),
                    nAGQ = 1,
@@ -578,7 +578,7 @@ print(final_table, row.names = FALSE)
 ## Full Model (Not scaled; converged)
 
 ```{r}
-glmm_full <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET +  TAUPET + (1 | patid),
+glmm_full <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET +  TAUPET + (time | patid),
                    data = alz_long_all_bin,
                    family = binomial(link = "logit"),
                    nAGQ = 1,
@@ -591,7 +591,7 @@ summary(glmm_full)
 
 ```{r}
 # 6.2 Full GLMM
-glmm_full <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET +  TAUPET + (1 | patid),
+glmm_full <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET +  TAUPET + (time | patid),
                    data = alz_long_scaled,
                    family = binomial(link = "logit"),
                    nAGQ = 1,
