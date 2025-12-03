@@ -358,28 +358,6 @@ alz_long3_bin <- alz_long2 %>%
 ```
 
 
-# Random effects models
-```{r}
-# 6.1 Base GLMM
-glmm_base <- glmer(CDRSBbin ~ time_num + age + sex + bmi + (1 | patid),
-                   data = alz_long2_bin,
-                   family = binomial(link = "logit"),
-                   nAGQ = 1) # Laplace approximation
-
-summary(glmm_base)
-
-
-# 6.2 Full GLMM
-glmm_full <- glmer(CDRSBbin ~ time_num + age + sex + bmi + adl + abpet0 + taupet0 + (1 | patid),
-                   data = alz_long2_bin,
-                   family = binomial(link = "logit"),
-                   nAGQ = 1)
-
-summary(glmm_full)
-```
-
-
-
 
 # Random effects structure check
 
@@ -463,7 +441,7 @@ summary(model4)
 ```
 
 
-# Number of ADQ points check 
+# Number of AGQ points check 
 
 ```{r}
 # Define the nAGQ values to test
@@ -505,17 +483,204 @@ for (n in as.character(nAGQ_values)) {
 print(final_results)
 ```
 
-# Quadratic time, no scaling or centering, convergence issues 
+
+# Base vs Full model
+## Base model
 ```{r}
-# # Model 4: A random intercept and slope for patid, no random effects for trial
-# model4 <- glmer(CDRSBbin ~ time + I(time^2) + age + sex + bmi + adl + ABPET + TAUPET + BPRS + (time | patid),
-#                 data = alz_long_all_bin,
-#                 family = binomial(link = "logit"),
-#                 nAGQ = 1,
-#                 control = glmerControl(optimizer = "bobyqa"))
-# 
-# summary(model4)
+# 6.1 Base GLMM
+glmm_base <- glmer(CDRSBbin ~ time + age + sex + bmi + (1 | patid),
+                   data = alz_long_scaled,
+                   family = binomial(link = "logit"),
+                   nAGQ = 1,
+                   control = glmerControl(optimizer = "bobyqa")) # Laplace approximation
+
+summary(glmm_base)
+
+# 1. Get the Standard Deviations from your ORIGINAL (unscaled) dataframe
+# IMPORTANT: Ensure 'alz_long_all_bin' is the dataframe BEFORE you scaled it.
+original_sds <- sapply(alz_long_all_bin[vars_to_scale], sd, na.rm = TRUE)
+
+# 2. Extract Scaled Estimates and SEs from the model (using model4.2)
+scaled_betas <- fixef(glmm_base)
+scaled_se    <- sqrt(diag(vcov(glmm_base)))
+
+# 3. Create a results table
+res_table <- data.frame(
+  Term = names(scaled_betas),
+  Beta_Scaled = scaled_betas,
+  SE_Scaled = scaled_se
+)
+
+# 4. Create columns for Raw values
+res_table$Beta_Raw <- NA
+res_table$SE_Raw <- NA
+
+# 5. Loop through to unscale
+# We check each term to see which variables it contains
+for(i in 1:nrow(res_table)) {
+  term_name <- res_table$Term[i]
+  
+  # A. Intercept: Not unscaled, so we copy the original values.
+  if(term_name == "(Intercept)") {
+    res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i]
+    res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]
+    next 
+  }
+  
+  # B. Interaction Terms (contain ":")
+  if(grepl(":", term_name)) {
+    parts <- unlist(strsplit(term_name, ":"))
+    sd1 <- original_sds[parts[1]]
+    sd2 <- original_sds[parts[2]]
+    res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i] / (sd1 * sd2)
+    res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]   / (sd1 * sd2)
+    
+  } else {
+    # C. Main Effects
+    if(term_name %in% names(original_sds)) {
+      res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i] / original_sds[term_name]
+      res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]   / original_sds[term_name]
+    } else {
+      # D. Categorical/Unscaled Vars (like sex) -> Keep as is
+      res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i]
+      res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]
+    }
+  }
+}
+
+# 6. Calculate Raw Odds Ratios and CIs
+res_table$OR_Raw <- exp(res_table$Beta_Raw)
+res_table$CI_Lower_Raw <- exp(res_table$Beta_Raw - 1.96 * res_table$SE_Raw)
+res_table$CI_Upper_Raw <- exp(res_table$Beta_Raw + 1.96 * res_table$SE_Raw)
+
+
+# 7. Extract P-values from the model summary
+p_values <- summary(glmm_base)$coefficients[, "Pr(>|z|)"]
+res_table$P_Value <- p_values
+
+
+# 8. Prepare the final table with raw, unrounded values
+# Select all the relevant columns you've calculated
+final_table <- res_table[, c("Term", "Beta_Raw", "SE_Raw", "OR_Raw", "CI_Lower_Raw", "CI_Upper_Raw", "P_Value")]
+
+# Rename columns to match the desired output format for clarity
+colnames(final_table) <- c("Predictor", "Estimate", "SE", "OR", "CI_Lower_OR", "CI_Upper_OR", "p_value")
+
+# Optional: Remove the intercept row if you don't need it
+final_table <- final_table[final_table$Predictor != "(Intercept)", ]
+
+
+# 9. Print the final table with unrounded values
+print("--- Final Back-Transformed Model Results (Unrounded) ---")
+print(final_table, row.names = FALSE)
 ```
+
+## Full Model (Not scaled; converged)
+
+```{r}
+glmm_full <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET +  TAUPET + (1 | patid),
+                   data = alz_long_all_bin,
+                   family = binomial(link = "logit"),
+                   nAGQ = 1,
+                   control = glmerControl(optimizer = "bobyqa"))
+
+summary(glmm_full)
+```
+
+## Full model
+
+```{r}
+# 6.2 Full GLMM
+glmm_full <- glmer(CDRSBbin ~ time + age + sex + bmi + adl + ABPET +  TAUPET + (1 | patid),
+                   data = alz_long_scaled,
+                   family = binomial(link = "logit"),
+                   nAGQ = 1,
+                   control = glmerControl(optimizer = "bobyqa"))
+
+summary(glmm_full)
+
+
+# 1. Get the Standard Deviations from your ORIGINAL (unscaled) dataframe
+# IMPORTANT: Ensure 'alz_long_all_bin' is the dataframe BEFORE you scaled it.
+original_sds <- sapply(alz_long_all_bin[vars_to_scale], sd, na.rm = TRUE)
+
+# 2. Extract Scaled Estimates and SEs from the model (using model4.2)
+scaled_betas <- fixef(glmm_full)
+scaled_se    <- sqrt(diag(vcov(glmm_full)))
+
+# 3. Create a results table
+res_table <- data.frame(
+  Term = names(scaled_betas),
+  Beta_Scaled = scaled_betas,
+  SE_Scaled = scaled_se
+)
+
+# 4. Create columns for Raw values
+res_table$Beta_Raw <- NA
+res_table$SE_Raw <- NA
+
+# 5. Loop through to unscale
+# We check each term to see which variables it contains
+for(i in 1:nrow(res_table)) {
+  term_name <- res_table$Term[i]
+  
+  # A. Intercept: Not unscaled, so we copy the original values.
+  if(term_name == "(Intercept)") {
+    res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i]
+    res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]
+    next 
+  }
+  
+  # B. Interaction Terms (contain ":")
+  if(grepl(":", term_name)) {
+    parts <- unlist(strsplit(term_name, ":"))
+    sd1 <- original_sds[parts[1]]
+    sd2 <- original_sds[parts[2]]
+    res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i] / (sd1 * sd2)
+    res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]   / (sd1 * sd2)
+    
+  } else {
+    # C. Main Effects
+    if(term_name %in% names(original_sds)) {
+      res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i] / original_sds[term_name]
+      res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]   / original_sds[term_name]
+    } else {
+      # D. Categorical/Unscaled Vars (like sex) -> Keep as is
+      res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i]
+      res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]
+    }
+  }
+}
+
+# 6. Calculate Raw Odds Ratios and CIs
+res_table$OR_Raw <- exp(res_table$Beta_Raw)
+res_table$CI_Lower_Raw <- exp(res_table$Beta_Raw - 1.96 * res_table$SE_Raw)
+res_table$CI_Upper_Raw <- exp(res_table$Beta_Raw + 1.96 * res_table$SE_Raw)
+
+
+# 7. Extract P-values from the model summary
+p_values <- summary(glmm_full)$coefficients[, "Pr(>|z|)"]
+res_table$P_Value <- p_values
+
+
+# 8. Prepare the final table with raw, unrounded values
+# Select all the relevant columns you've calculated
+final_table <- res_table[, c("Term", "Beta_Raw", "SE_Raw", "OR_Raw", "CI_Lower_Raw", "CI_Upper_Raw", "P_Value")]
+
+# Rename columns to match the desired output format for clarity
+colnames(final_table) <- c("Predictor", "Estimate", "SE", "OR", "CI_Lower_OR", "CI_Upper_OR", "p_value")
+
+# Optional: Remove the intercept row if you don't need it
+final_table <- final_table[final_table$Predictor != "(Intercept)", ]
+
+
+# 9. Print the final table with unrounded values
+print("--- Final Back-Transformed Model Results (Unrounded) ---")
+print(final_table, row.names = FALSE)
+```
+
+
+
 
 # Quadratic time with scaling and centering 
 ```{r}
@@ -529,7 +694,7 @@ model4.2 <- glmer(CDRSBbin ~ time + I(time^2) + age + sex + bmi + adl + ABPET + 
 summary(model4.2)
 ```
 
-# BACKTRANSFORMATION OF THE COEFFICIENTS OF MODEL 4.2
+## BACKTRANSFORMATION OF THE COEFFICIENTS OF MODEL 4.2
 
 - This block of code undoes that transformations applied here: 
     vars_to_scale <- c("time", "age", "bmi", "adl", "ABPET", "TAUPET", "BPRS")
@@ -621,107 +786,7 @@ print(final_table, row.names = FALSE)
 ```
 
 
-# Linear time with taupet interaction, SCALED 
-```{r}
-# Model 4: A random intercept and slope for patid, no random effects for trial
-model4.3 <- glmer(CDRSBbin ~ time*(TAUPET + ABPET + BPRS) + age + sex + bmi + adl + (time | patid),
-                data = alz_long_scaled,
-                family = binomial(link = "logit"),
-                nAGQ = 1,
-                control = glmerControl(optimizer = "bobyqa"))
-
-summary(model4.3)
-```
-
-```{r}
-# Model 4: A random intercept and slope for patid, no random effects for trial
-model4.4 <- glmer(CDRSBbin ~ time*(TAUPET + ABPET + BPRS) + age + sex + bmi + adl + (time | patid),
-                data = alz_long_all_bin,
-                family = binomial(link = "logit"),
-                nAGQ = 1,
-                control = glmerControl(optimizer = "bobyqa"))
-
-summary(model4.4)
-```
-
-```{r}
-# 1. Get the Standard Deviations from your ORIGINAL (unscaled) dataframe
-# IMPORTANT: Ensure 'alz_long_all_bin' is the dataframe BEFORE you scaled it.
-original_sds <- sapply(alz_long_all_bin[vars_to_scale], sd, na.rm = TRUE)
-
-# 2. Extract Scaled Estimates and SEs from the model
-scaled_betas <- fixef(model4.3)
-scaled_se    <- sqrt(diag(vcov(model4.3)))
-
-# 3. Create a results table
-res_table <- data.frame(
-  Term = names(scaled_betas),
-  Beta_Scaled = scaled_betas,
-  SE_Scaled = scaled_se
-)
-
-# 4. Create columns for Raw values
-res_table$Beta_Raw <- NA
-res_table$SE_Raw <- NA
-
-# 5. Loop through to unscale
-# We check each term to see which variables it contains
-for(i in 1:nrow(res_table)) {
-  term_name <- res_table$Term[i]
-  
-  # A. Intercept: Skip (hard to unscale, usually not reported)
-  if(term_name == "(Intercept)") next 
-  
-  # B. Interaction Terms (contain ":")
-  if(grepl(":", term_name)) {
-    # Split the name (e.g., "time:BPRS" -> "time", "BPRS")
-    parts <- unlist(strsplit(term_name, ":"))
-    # Find SDs for both parts
-    sd1 <- original_sds[parts[1]]
-    sd2 <- original_sds[parts[2]]
-    
-    # Divide by PRODUCT of SDs
-    res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i] / (sd1 * sd2)
-    res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]   / (sd1 * sd2)
-    
-  } else {
-    # C. Main Effects
-    # Check if this term is in our list of scaled variables
-    if(term_name %in% names(original_sds)) {
-      # Divide by the SD
-      res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i] / original_sds[term_name]
-      res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]   / original_sds[term_name]
-    } else {
-      # D. Categorical/Unscaled Vars (like sex) -> Keep as is
-      res_table$Beta_Raw[i] <- res_table$Beta_Scaled[i]
-      res_table$SE_Raw[i]   <- res_table$SE_Scaled[i]
-    }
-  }
-}
-
-# 6. Calculate Raw Odds Ratios and CIs
-res_table$OR_Raw <- exp(res_table$Beta_Raw)
-res_table$CI_Lower_Raw <- exp(res_table$Beta_Raw - 1.96 * res_table$SE_Raw)
-res_table$CI_Upper_Raw <- exp(res_table$Beta_Raw + 1.96 * res_table$SE_Raw)
-
-
-# 1. Extract P-values from the model summary
-# Note: The column name in glmer summary is usually "Pr(>|z|)"
-p_values <- summary(model4.3)$coefficients[, "Pr(>|z|)"]
-
-# 2. Add them to your results table
-res_table$P_Value <- p_values
-
-# 3. Define columns to round (include P_Value now)
-cols_to_round <- c("OR_Raw", "CI_Lower_Raw", "CI_Upper_Raw", "P_Value")
-
-# 4. Round the numeric columns
-res_table[, cols_to_round] <- round(res_table[, cols_to_round], 4)
-
-# 5. Print the final table with P-values
-print(res_table[, c("Term", "OR_Raw", "CI_Lower_Raw", "CI_Upper_Raw", "P_Value")])
-
-```
+# Interaction time * taupet 
 
 ```{r}
 # Model 4.5 : ONLY TAUPET, SCALED AND CENTERED 
@@ -734,7 +799,7 @@ model4.5 <- glmer(CDRSBbin ~ time*(TAUPET) + age + sex + bmi + adl + ABPET + BPR
 summary(model4.5)
 ```
 
-# THIS IS THE BACKTRANSFORMATION OF MODEL 4.5 COEFFICIENTS TO THEIR ORIGINAL SCALE
+## BACKTRANSFORMATION OF MODEL 4.5 COEFFICIENTS TO THEIR ORIGINAL SCALE
 ```{r}
 # 1. Get the Standard Deviations from your ORIGINAL (unscaled) dataframe
 # IMPORTANT: Ensure 'alz_long_all_bin' is the dataframe BEFORE you scaled it.
@@ -858,20 +923,20 @@ ggplot(eb_merged, aes(x = age, y = EB_Intercept)) +
 
 Predicted probabilities 
 ```{r}
-# Calculate predicted probabilities (response scale)
-pred_probs <- emmeans(glmm_full, ~ time_num, type = "response",
-                      at = list(time_num = 0:6)) %>%
-              as.data.frame()
-
-# Plot
-ggplot(pred_probs, aes(x = time_num, y = prob)) +
-  geom_line() +
-  geom_point() +
-  geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL), alpha = 0.2) +
-  scale_y_continuous(limits = c(0,1)) +
-  labs(x = "Years since baseline", y = "Predicted probability of CDRSBbin = 1",
-       title = "Subject-specific predicted probability over time") +
-  theme_minimal()
+# # Calculate predicted probabilities (response scale)
+# pred_probs <- emmeans(glmm_full, ~ time_num, type = "response",
+#                       at = list(time_num = 0:6)) %>%
+#               as.data.frame()
+# 
+# # Plot
+# ggplot(pred_probs, aes(x = time_num, y = prob)) +
+#   geom_line() +
+#   geom_point() +
+#   geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL), alpha = 0.2) +
+#   scale_y_continuous(limits = c(0,1)) +
+#   labs(x = "Years since baseline", y = "Predicted probability of CDRSBbin = 1",
+#        title = "Subject-specific predicted probability over time") +
+#   theme_minimal()
 ```
 
 
