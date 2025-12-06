@@ -1,0 +1,78 @@
+---
+title: "LDA-Assignment 3 - Ermi's Script"
+author: "Ermioni Athanasiadi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(haven)
+library(tidyverse)
+library(patchwork)
+library(pROC)
+library(nlme)
+library(data.table)
+library(broom)
+library(lattice)
+library(sjPlot)
+library(xtable)
+library(kableExtra)
+
+```
+
+
+
+```{r}
+setwd("./../data")
+
+filename <- "alzheimer25.sas7bdat"
+
+dat <- read_sas(filename)
+dat_dt <- setDT(read_sas(filename))
+```
+
+
+Data Preparation
+```{r reshape}
+
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat) {
+    dat <- dat %>%
+        mutate(
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+        )
+    dat
+}
+
+dat <- to_factor(dat)
+dat_long <- reshape_dat(dat)
+
+
+dat_long <- dat_long %>%
+    mutate(
+        time = as.factor(time),  # levels 0-6
+        time.num = as.numeric(time)   # values 1-7
+    )
+
+
+
+
+```
