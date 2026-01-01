@@ -10,34 +10,50 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
+To Do Ermi:
+- check why lmm produces different model results than in report 1
+- use numeric time and scaled to 0-6 before imputing datasets
+- standardize coefficients in lmm of report 1 to be able to compare with MI-version
+- investigate singularity issues in glmm/gee mice imputation
+- try out weighted GEE
+- try to succeed with wide format imputation
+
+
+
 ```{r}
 library(haven)
 library(tidyverse)
 library(patchwork)
 library(pROC)
 library(nlme)
+library(lme4)
 library(data.table)
 library(broom)
 library(lattice)
 library(sjPlot)
 library(xtable)
 library(kableExtra)
-
+library(mice)
+library(miceadds)
+library(geepack)
+library(mitml)
+library(lmerTest)
+library(broom.mixed)
 ```
 
 
 
 ```{r}
-setwd("./../data")
+setwd("./data")
 
 filename <- "alzheimer25.sas7bdat"
 
 dat <- read_sas(filename)
-dat_dt <- setDT(read_sas(filename))
+# dat_dt <- setDT(read_sas(filename))
 ```
 
 
-Data Preparation
+# Data Preparation
 ```{r reshape}
 
 reshape_dat <- function(dat) {
@@ -58,6 +74,7 @@ to_factor <- function(dat) {
             trial = as.factor(trial),
             job = as.factor(job),
             wzc = as.factor(wzc),
+            patid_fct = as.factor(patid)
         )
     dat
 }
@@ -69,10 +86,529 @@ dat_long <- reshape_dat(dat)
 dat_long <- dat_long %>%
     mutate(
         time = as.factor(time),  # levels 0-6
-        time.num = as.numeric(time)   # values 1-7
+        time_num = as.numeric(time)   # values 1-7
     )
 
 
+# Baseline per subject (year 0)
+base <- dat_long %>%
+  filter(time == 0) %>%
+  transmute(
+    patid, trial,
+    # Age = age, Sex = sex, Edu = edu, BMI = bmi, Job = job, Income = inkomen,
+    # ADL = adl, WZC = wzc,
+    cdrsb0 = cdrsb, 
+    abpet0 = abpet, 
+    taupet0 = taupet
+  )
+
+# Add baseline + time to all rows
+dat_long <- dat_long %>%
+  left_join(base, by = c("patid","trial"))
+
+rm(base)
+
+dat_long_scaled <- dat_long
+vars_to_scale <- c("time_num", "age", "bmi", "adl", "abpet", "taupet", "bprs")
+dat_long_scaled[vars_to_scale] <- sapply(dat_long_scaled[vars_to_scale], scale)
+```
+
+Now prepare for the binary outcome:
+```{r}
+
+dat_long_bin <- dat_long %>%
+  # Drop missing outcomes
+  # Binary outcome: 1 = severe (>10), 0 = non-severe
+  mutate(
+    cdrsb_bin = as.factor(as.character(ifelse(cdrsb > 10, 1, 0))),
+    time_num0 = dat_long_bin$time_num - 1
+  )
+
+dat_long_bin_scaled <- dat_long_bin
+vars_to_scale <- c("time_num", "age", "bmi", "adl", "abpet", "taupet", "bprs")
+dat_long_bin_scaled[vars_to_scale] <- sapply(dat_long_bin_scaled[vars_to_scale], scale)
 
 
 ```
+
+
+# Explore Missingness
+```{r}
+
+dat_check <- dat_long %>%
+    arrange(patid, time_num) %>%
+    group_by(patid) %>%
+    mutate(
+        miss = is.na(bprs),
+        miss_started = cummax(miss)
+    )
+
+
+missingness_pattern <- dat_check %>%
+    summarise(
+        any_missing = any(miss),
+        intermittent = any(!miss & miss_started),
+        monotone = any_missing & !intermittent
+    )
+
+missingness_pattern %>% 
+    count(monotone)
+
+missingness_pattern %>%
+    count(intermittent)
+```
+Ok, we have verified that we have no intermittent missingness. Let's now consider our models from the previous assignments and use MI to deal with the incomplete data.
+
+
+
+# Question 4
+
+
+## For LMM: 
+```{r}
+
+# m5 from assignment1
+model_lmm <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid),
+           data = dat_long, REML = FALSE)
+
+```
+
+```{r}
+summary(model_lmm)
+```
+#### Mice: Wide Format:
+##### missing data exploration
+```{r}
+# use dataset in the wide format
+
+dat %>% select(-patid_fct) %>% 
+    md.pattern(rotate.names = T)
+
+
+dat_long %>% select(-patid_fct, -time_num) %>% 
+    md.pattern(rotate.names = T)
+
+    
+sapply(dat_long %>% select(-patid_fct, -time_num), function(x) mean(is.na(x)*100)) 
+
+
+ggplot(dat_long, aes(x=bprs, fill="density")) + 
+  geom_density(alpha=0.5)
+
+```
+
+Ok, we have 29.1% missingness in four variables (long format): In the three covariates cdrsb, abpet, taupet and the incomplete outcome bprs. Though we will not use the full variables of cdrsb, abpet and taupet in our analysis model (but only the baseline values, which are complete), we will still add the full but incomplete variables to our imputation model. They will serve as auxiliary variables. Thus, we will impute all four variables.
+
+Lets now set up mice:
+
+##### Mice setup 
+
+```{r}
+
+# prepare dataframe (wide format)
+dat_mice <- dat %>%
+    select(-patid_fct) %>%
+    mutate(
+    patid = as.integer(patid)  # make sure id variable is integer
+    )
+
+# imputation method
+meth <- make.method(dat_mice)
+# set method for all incomplete vars except bprs to 0 -> dont impute
+meth[c(paste0("taupet", 0:6))] <- "pmm"
+meth[c(paste0("abpet", 0:6))] <- "pmm"
+meth[c(paste0("cdrsb", 0:6))] <- "pmm" 
+meth[paste0("bprs", 0:6)] <- "pmm"
+meth
+
+# predictor matrix
+pred <- make.predictorMatrix(dat_mice)
+pred[, "patid"] <- 0  # grouping variable id: see van Buuren (2018, p.147) -> "Identification variables such as subject ID numbers have no predictive value and should be excluded from the imputation model.”
+```
+
+We have to choose an imputation method. As we deal with hierarchical data, we could also impute in the long format by using the 2l. methods provided by the miceadds package. We have missing data only on level 2 (i.e. the time / repeated measurements level).
+
+Bprs is numeric and are assumed to be a continuous variable. Lets impute it with predictive mean matching (pmm), as its a semi-parametric and thus robust method and produces only plausible values, because it samples from observed donor cases.
+
+We start with k=5 donor cases for drawing imputed values.
+
+##### Imputation
+```{r}
+imp.lmm <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 10, donors = 5, maxit = 50, seed = 1212, print = F) 
+```
+
+
+##### Post-imputation diagnostics
+```{r}
+imp.1 <- imp.lmm
+
+conv <- convergence(imp.1, diagnostic = "all")
+
+conv.imputed <- conv %>%
+    filter(vrb %in% c(paste0("bprs", 1:6)) | 
+           vrb %in% c(paste0("cdrsb", 1:6)) |
+           vrb %in% c(paste0("abpet", 1:6)) |
+           vrb %in% c(paste0("taupet", 1:6))
+               )
+
+conv.imputed
+
+plot(imp.1)
+
+ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) + 
+    geom_point() +
+    geom_line()
+
+ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) + 
+    geom_point() +
+    geom_line()
+
+stripplot(imp.1)
+stripplot(imp.1, bprs1~.imp, pch=20, cex=2)  # blue: observed data, red: imputed data
+```
+
+In the stripplot, we can see that primarily high values of bprs are imputed in the first measurement year. This could also be investigated for the other time points.
+
+
+##### back-transform imputed datasets to long format
+```{r}
+implist_wide <- mids2mitml.list(imp.1)
+
+implist_long <- lapply(implist_wide, function(d) {
+  d %>%
+    pivot_longer(
+      cols = paste0("bprs", 0:6),
+      names_to = "time",
+      values_to = "bprs"
+    ) %>%
+    mutate(time_num0 = as.numeric(gsub("bprs", "", time)))
+})
+
+```
+
+Unclear how to proceed with this. 
+Is this a better way? 
+```{r eval=FALSE, include=FALSE}
+imp.1_long <- complete(imp.1, action = "long", include = TRUE)
+
+implist <- mids2mitml.list(imp.1_long)
+
+model_lmm_mice <- with(implist, {
+    lmerTest::lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid), REML = FALSE)
+})
+
+```
+No, this doesnt run because mitml does not expect a dataframe as input.
+
+```{r eval=FALSE, include=FALSE}
+implist <- mids2mitml.list(imp.1)
+
+
+
+# reshape to long inside the list
+implist_long <- lapply(implist, function(d) {
+  d %>%
+            pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        ) %>%
+    mutate(time_num0 = as.numeric(gsub("bprs", "", time)))
+})
+
+fits <- with(
+  implist_long,
+  expr = {
+    lmerTest::lmer(
+      bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) +
+        wzc + taupet0 + abpet0 +
+        (time_num0 | trial/patid),
+      REML = FALSE
+    )
+  }
+)
+
+testEstimates(fits, var.comp = TRUE)
+```
+This approach fails too, same problem: with() expects a mids object not a list.
+
+Lets try a different approach (suggested in https://stats.stackexchange.com/questions/515598/is-it-possible-to-imput-values-using-mice-package-reshape-and-perform-gee-in-r)
+
+
+##### Estimate analysis models for all imputed datasets and pool results
+```{r eval=FALSE, include=FALSE}
+
+fits <- with(
+  imp.1,
+  {
+    # 1. define dataset for this imputation
+    dat <- data.frame(
+      patid = patid,
+      trial = trial,
+      sex = sex,
+      age = age,
+      edu = edu,
+      bmi = bmi,
+      inkomen = inkomen,
+      job = job,
+      adl = adl,
+      wzc = wzc,
+      taupet0 = taupet0,
+      abpet0 = abpet0,
+      cdrsb0 = cdrsb0,
+      bprs0 = bprs0,
+      bprs1 = bprs1,
+      bprs2 = bprs2,
+      bprs3 = bprs3,
+      bprs4 = bprs4,
+      bprs5 = bprs5,
+      bprs6 = bprs6
+    )
+    
+    # 2. reshape to long format
+    dat_long <- dat %>%
+            pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        ) #%>%
+    #mutate(time_num0 = as.numeric(gsub("bprs", "", time)))
+    dat_long <- dat_long %>%
+        mutate(
+            time_num = as.numeric(time)
+            time_num0 = dat_long_bin$time - 1
+        )
+    
+    # 3. fit linear mixed model
+    lme4::lmer(
+      bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) +
+        wzc + taupet0 + abpet0 +
+        (time_num0 | trial/patid),
+      data = dat_long,
+      REML = FALSE
+    )
+  }
+)
+
+
+```
+This doesnt work yet.
+
+We will have to impute in the long format.
+
+
+#### Mice: Long Format
+
+##### Mice setup 
+```{r}
+
+# prepare dataframe (wide format)
+dat_mice <- dat_long_scaled %>%
+    select(-patid_fct, -time_num) %>%
+    mutate(
+    patid = as.integer(patid),  # make sure grouping variables are  integer
+    trial = as.integer(trial)
+    )
+
+# imputation method
+meth <- make.method(dat_mice)
+# set method for all incomplete vars except bprs to 0 -> dont impute
+meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pmm"
+
+meth
+
+# predictor matrix
+pred <- make.predictorMatrix(dat_mice)
+pred[, "patid"] <- -2  # 
+pred[, "trial"] <- -2
+pred[, "taupet0"] <- 0
+pred[, "abpet0"]  <- 0
+pred[, "cdrsb0"]  <- 0
+
+```
+
+##### Imputation
+```{r}
+imp.1 <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 5, donors = 5, maxit = 10, seed = 1212, print = F) 
+```
+
+
+##### Post-imputation diagnostics
+```{r}
+conv <- convergence(imp.1, diagnostic = "all")
+
+conv.imputed <- conv %>%
+    filter(vrb %in% c("abpet", "taupet", "cdrsb", "bprs"))
+
+conv.imputed
+
+plot(imp.1)
+
+ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) + 
+    geom_point() +
+    geom_line()
+
+ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) + 
+    geom_point() +
+    geom_line()
+
+stripplot(imp.1)
+stripplot(imp.1, bprs~.imp, pch=20, cex=2)  # blue: observed data, red: imputed data
+```
+
+#### Analysis
+```{r}
+implist <- mids2mitml.list(imp.1)
+
+lmer_fits <- with(
+  implist,
+  expr = {
+    lmerTest::lmer(
+      bprs ~ as.numeric(time) * (sex + age + adl + job + cdrsb0) +  # time_num0
+        wzc + taupet + abpet0 +
+        (as.numeric(time) | trial/patid),
+      REML = FALSE
+    )
+  }
+)
+
+summary(mice::pool(lmer_fits))
+results <- testEstimates(lmer_fits, extra.pars = T)
+lmer_results_df <- as.data.frame(results$estimates)  # different degrees of freedom obtained than with pool()
+
+
+save(lmer_results_df, file = "./results/lmer_results.RData") # use load() function to load dataframe into environment
+```
+
+
+## For GLMM:
+
+##### Quadratic time with scaling and centering 
+```{r}
+# Model 4: A random intercept and slope for patid, no random effects for trial
+model_glmm <- glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + bprs + (time_num0 | patid_fct),
+                data = dat_long_bin_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+summary(model_glmm)
+```
+
+#### Mice
+
+###### Mice setup 
+```{r}
+
+# prepare dataframe (wide format)
+dat_mice <- dat_long_bin_scaled %>%
+    select(-patid_fct, -time, -time_num) %>%
+    mutate(
+    patid = as.integer(patid),  # make sure grouping variables are  integer
+    trial = as.integer(trial)
+    )
+
+# imputation method
+meth <- make.method(dat_mice)
+# set method for all incomplete vars except bprs to 0 -> dont impute
+meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pmm"
+meth[c("cdrsb_bin")] <- "logreg"
+
+meth
+
+# predictor matrix
+pred <- make.predictorMatrix(dat_mice)
+pred[, "patid"] <- -2  # 
+pred[, "trial"] <- -2
+pred[, "taupet0"] <- 0
+pred[, "abpet0"]  <- 0
+pred[, "cdrsb0"]  <- 0
+
+```
+###### Imputation
+```{r}
+imp.glmm <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 5, donors = 5, maxit = 10, seed = 1212, print = F) 
+```
+
+
+###### Post-imputation diagnostics
+```{r}
+conv <- convergence(imp.1, diagnostic = "all")
+
+conv.imputed <- conv %>%
+    filter(vrb %in% c("abpet", "taupet", "cdrsb", "bprs"))
+
+conv.imputed
+
+plot(imp.1)
+
+ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) + 
+    geom_point() +
+    geom_line()
+
+ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) + 
+    geom_point() +
+    geom_line()
+
+stripplot(imp.1)
+stripplot(imp.1, bprs~.imp, pch=20, cex=2)  # blue: observed data, red: imputed data
+```
+##### Analysis
+```{r}
+library(broom.mixed)  # run this before pool() argument to prevent error message
+
+implist <- mids2mitml.list(imp.1)
+
+glmm_fits <- with(
+  implist,
+  expr = {
+      glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + bprs + (time_num0 | patid),  # patid should be factor
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+      
+  }
+)
+
+summary(mice::pool(glmm_fits))
+results <- testEstimates(glmm_fits, extra.pars = T)
+glmm_results_df <- as.data.frame(results$estimates)  # different degrees of freedom obtained than with pool()
+
+
+save(glmm_results_df, file = "./results/glmm_results.RData")  # use load() function to load dataframe into environment
+```
+
+## For GEE: 
+```{r}
+model_gee <- geeglm(cdrsb_bin ~ time_num0 + I(time_num0^2) + taupet + adl + abpet + age + sex + bmi,
+                   id = patid_fct,
+                   data = dat_long_bin,
+                   family = binomial,
+                   corstr = "exchangeable")
+summary(model_gee)
+exp(coef(model_gee))
+```
+
+As we have already imputed the missing values for the glmm analysis, we don't need to redo the imputations, we can analyse right away:
+
+#### Analysis
+```{r}
+implist <- mids2mitml.list(imp.glmm)
+
+gee_fits <- with(
+  implist,
+  expr = {
+   geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + taupet + adl + abpet + age + sex + bmi,
+                   id = patid,
+                   family = binomial,
+                   corstr = "exchangeable")
+  }
+)
+
+summary(mice::pool(gee_fits))
+results <- testEstimates(gee_fits, extra.pars = T)
+gee_results_df <- as.data.frame(results$estimates)  # different degrees of freedom obtained than with pool()
+
+save(gee_results_df, file = "./results/gee_results.RData") # use load() function to load dataframe into environment
+```
+
