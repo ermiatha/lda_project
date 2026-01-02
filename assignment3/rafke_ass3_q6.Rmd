@@ -1,0 +1,99 @@
+---
+title: "Assignment 3"
+author: "Rafke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 6: Sensitivity Analysis 
+
+```{r}
+library(haven)
+library(tidyverse)
+library(patchwork)
+library(pROC)
+library(nlme)
+library(lme4)
+library(data.table)
+library(broom)
+library(lattice)
+library(sjPlot)
+library(xtable)
+library(kableExtra)
+library(mice)
+library(miceadds)
+library(geepack)
+library(mitml)
+library(lmerTest)
+library(broom.mixed)
+```
+
+
+```{r}
+dat <- read_sas("alzheimer25.sas7bdat")
+str(dat)
+colSums(is.na(dat))
+```
+
+# Data Preparation
+```{r reshape}
+
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat_long) {
+
+    dat_long <- dat_long %>%
+        mutate(
+            time = as.factor(time),  # coded 0-6
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+            time_num = as.numeric(time)  # coded 1-7
+        )
+    dat_long
+}
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+
+# Baseline per subject (year 0)
+base <- dat_long %>%
+  filter(time == 0) %>%
+  transmute(
+    patid, trial,
+    # Age = age, Sex = sex, Edu = edu, BMI = bmi, Job = job, Income = inkomen,
+    # ADL = adl, WZC = wzc,
+    cdrsb0 = cdrsb, 
+    abpet0 = abpet, 
+    taupet0 = taupet
+  )
+
+# Add baseline + time to all rows
+dat_long <- dat_long %>%
+  left_join(base, by = c("patid","trial"))
+
+rm(base)
+
+dat_long_scaled <- dat_long
+vars_to_scale <- c("time_num", "age", "bmi", "adl", "abpet", "taupet", "bprs")
+dat_long_scaled[vars_to_scale] <- sapply(dat_long_scaled[vars_to_scale], scale)
+```
+
+```{r}
+lmm_model <- lmer(bprs ~ time_num * (sex + age + adl + job + cdrsb0) + wzc + taupet0 + abpet0 + (time_num | trial/patid), data = dat_long_scaled, REML = FALSE)
+```
+
