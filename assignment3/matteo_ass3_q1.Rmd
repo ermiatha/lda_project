@@ -111,6 +111,31 @@ kable(miss_by_time, digits = 3,
   kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
+```{r missing_proportion_plot, fig.width=10, fig.height=6}
+miss_by_time_long <- miss_by_time %>%
+  select(time_num, BPRS_Prop, CDRSB_Prop, ABPET_Prop, TAUPET_Prop) %>%
+  pivot_longer(
+    cols = -time_num,
+    names_to = "Variable",
+    values_to = "Proportion"
+  ) %>%
+  mutate(Variable = gsub("_Prop", "", Variable))
+
+ggplot(miss_by_time_long, aes(x = time_num, y = Proportion, color = Variable, group = Variable)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_color_viridis_d() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Proportion of Missing Observations Over Time",
+    x = "Time Point",
+    y = "Proportion Missing",
+    color = "Outcome Variable"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+```
+
 # 2. Visualizing Missingness Patterns
 
 ## 2.1 Overall Missingness Pattern
