@@ -1,0 +1,345 @@
+---
+title: "Missingness Analysis"
+author: "Assignment 3"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+
+# Load Libraries and Data
+
+```{r libraries}
+libraries <- c(
+  "haven", "dplyr", "tidyr", "ggplot2", "reshape2",
+  "viridis", "knitr", "kableExtra", "naniar", "VIM", "mice"
+)
+
+for (pkg in libraries) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+invisible(lapply(libraries, library, character.only = TRUE))
+```
+
+```{r load_data}
+# Load data
+dat <- read_sas("dataset/alzheimer25.sas7bdat")
+
+# Reshape to long format
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat_long) {
+    dat_long <- dat_long %>%
+        mutate(
+            time = as.factor(time),
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+            time_num = as.numeric(time)
+        )
+    dat_long
+}
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+
+# Create wide format with key variables for pattern analysis
+dat_wide_key <- dat %>%
+  select(patid, age, sex, wzc, bmi, adl, trial,
+         bprs0, bprs1, bprs2, bprs3, bprs4, bprs5, bprs6,
+         cdrsb0, cdrsb1, cdrsb2, cdrsb3, cdrsb4, cdrsb5, cdrsb6)
+```
+
+# 1. Basic Missingness Statistics
+
+```{r basic_stats}
+# Count missing values per variable
+missing_summary <- dat %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing") %>%
+  mutate(
+    N_Total = nrow(dat),
+    Prop_Missing = N_Missing / N_Total
+  ) %>%
+  filter(N_Missing > 0) %>%
+  arrange(desc(N_Missing))
+
+kable(missing_summary, digits = 3, 
+      caption = "Variables with Missing Values") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r missingness_by_time}
+# Missingness by time point for key outcome variables
+miss_by_time <- dat_long %>%
+  group_by(time_num) %>%
+  summarise(
+    N_Total = n(),
+    BPRS_Missing = sum(is.na(bprs)),
+    BPRS_Prop = BPRS_Missing / N_Total,
+    CDRSB_Missing = sum(is.na(cdrsb)),
+    CDRSB_Prop = CDRSB_Missing / N_Total,
+    ABPET_Missing = sum(is.na(abpet)),
+    ABPET_Prop = ABPET_Missing / N_Total,
+    TAUPET_Missing = sum(is.na(taupet)),
+    TAUPET_Prop = TAUPET_Missing / N_Total
+  )
+
+kable(miss_by_time, digits = 3,
+      caption = "Missingness by Time Point") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# 2. Visualizing Missingness Patterns
+
+## 2.1 Overall Missingness Pattern
+
+```{r missing_pattern_plot, fig.width=10, fig.height=6}
+# Visualize missing data patterns for BPRS
+vis_miss(dat_wide_key %>% select(starts_with("bprs")),
+         cluster = FALSE) +
+  scale_fill_manual(
+    values = c("TRUE" = "red", "FALSE" = "lightgrey"),
+    labels = c("FALSE" = "Observed", "TRUE" = "Missing")
+  ) + 
+  labs(title = "Missing Data Pattern for BPRS Over Time") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# # Visualize missing data patterns for CDRSB
+# vis_miss(dat_wide_key %>% select(starts_with("cdrsb")), 
+#          cluster = FALSE) +
+#   labs(title = "Missing Data Pattern for CDRSB Over Time") +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+```{r dropout_percentage, fig.width=10, fig.height=6}
+ggplot(dropout_data, aes(x = time_num, y = Prop_Dropout * 100)) +
+  geom_area(fill = "#A23B72", alpha = 0.5) +
+  geom_line(color = "#A23B72", size = 1.2) +
+  geom_point(color = "#A23B72", size = 3) +
+  geom_text(aes(label = paste0(round(Prop_Dropout * 100, 1), "%")),
+            vjust = -1, size = 3.5) +
+  scale_y_continuous(limits = c(0, 70), breaks = seq(0, 70, 10)) +
+  labs(
+    title = "Cumulative Dropout Rate Over Time",
+    x = "Year",
+    y = "Dropout Rate (%)"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+## 2.3 Monotone vs Non-Monotone Missingness
+
+```{r monotone_pattern}
+# Check if dropout is monotone (once you drop out, you stay out)
+dat_dropout_pattern <- dat %>%
+  select(patid, starts_with("bprs")) %>%
+  mutate(across(starts_with("bprs"), ~ifelse(is.na(.), 0, 1)))
+
+# For each patient, check if pattern is monotone
+check_monotone <- function(row) {
+  vals <- as.numeric(row[-1])  # Exclude patid
+  # Monotone means: 1,1,1,...,1,0,0,0 (no return after dropout)
+  if (all(!is.na(vals))) {
+    # Find first 0
+    first_zero <- which(vals == 0)[1]
+    if (is.na(first_zero)) return(TRUE)  # No missingness
+    # Check if all subsequent values are 0
+    return(all(vals[first_zero:length(vals)] == 0))
+  }
+  return(FALSE)
+}
+
+monotone_results <- dat_dropout_pattern %>%
+  rowwise() %>%
+  mutate(is_monotone = check_monotone(c_across(everything()))) %>%
+  ungroup()
+
+monotone_summary <- monotone_results %>%
+  summarise(
+    N_Total = n(),
+    N_Monotone = sum(is_monotone),
+    N_NonMonotone = sum(!is_monotone),
+    Prop_Monotone = N_Monotone / N_Total
+  )
+
+kable(monotone_summary, digits = 3,
+      caption = "Monotone vs Non-Monotone Dropout Pattern") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+## 3.1 Dropout by Age
+
+```{r dropout_by_age, fig.width=10, fig.height=6}
+# Create missingness indicators
+dat$dropout_year1 <- as.numeric(is.na(dat$bprs1))
+dat$dropout_year2 <- as.numeric(is.na(dat$bprs2))
+dat$dropout_year3 <- as.numeric(is.na(dat$bprs3))
+dat$dropout_year4 <- as.numeric(is.na(dat$bprs4))
+dat$dropout_year5 <- as.numeric(is.na(dat$bprs5))
+dat$dropout_year6 <- as.numeric(is.na(dat$bprs6))
+
+# Calculate time to dropout
+dat$time_to_dropout <- apply(dat[, paste0("dropout_year", 1:6)], 1, function(x) {
+  first_na <- which(x == 1)[1]
+  if (is.na(first_na)) return(7)  # Never dropped out
+  return(first_na)
+})
+
+# Age vs time to dropout
+ggplot(dat, aes(x = factor(time_to_dropout), y = age)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(
+    title = "Age Distribution by Time to Dropout",
+    x = "Year of Dropout (7 = No Dropout)",
+    y = "Age at Baseline"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r age_density_dropout, fig.width=10, fig.height=6}
+# Compare age distribution between completers and dropouts
+dat_age_dropout <- dat %>%
+  mutate(completer = ifelse(is.na(bprs6), "Dropout", "Completer"))
+
+ggplot(dat_age_dropout, aes(x = age, fill = completer)) +
+  geom_density(alpha = 0.6) +
+  scale_fill_manual(values = c("Dropout" = "#d73027", "Completer" = "#4575b4")) +
+  labs(
+    title = "Age Distribution: Completers vs Dropouts at Year 6",
+    x = "Age at Baseline",
+    y = "Density",
+    fill = "Status"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+
+# Statistical test
+t.test(age ~ completer, data = dat_age_dropout)
+```
+
+## 3.2 Dropout by Baseline BPRS Score
+
+```{r dropout_by_bprs0, fig.width=10, fig.height=6}
+# BPRS at baseline vs time to dropout
+ggplot(dat, aes(x = factor(time_to_dropout), y = bprs0)) +
+  geom_boxplot(fill = "#e8a87c", alpha = 0.7) +
+  labs(
+    title = "Baseline BPRS Score by Time to Dropout",
+    subtitle = "Higher baseline scores may predict earlier dropout",
+    x = "Year of Dropout (7 = No Dropout)",
+    y = "BPRS Score at Baseline"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r bprs0_density_dropout, fig.width=10, fig.height=6}
+ggplot(dat_age_dropout, aes(x = bprs0, fill = completer)) +
+  geom_density(alpha = 0.6) +
+  scale_fill_manual(values = c("Dropout" = "#d73027", "Completer" = "#4575b4")) +
+  labs(
+    title = "Baseline BPRS Distribution: Completers vs Dropouts",
+    x = "BPRS Score at Baseline",
+    y = "Density",
+    fill = "Status"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+
+# Statistical test
+t.test(bprs0 ~ completer, data = dat_age_dropout)
+```
+
+## 3.3 Dropout by Sex
+
+```{r dropout_by_sex, fig.width=10, fig.height=6}
+dropout_sex_summary <- dat %>%
+  mutate(
+    sex = factor(sex, labels = c("Male", "Female")),
+    dropout_status = ifelse(is.na(bprs6), "Dropout", "Completer")
+  ) %>%
+  group_by(sex, dropout_status) %>%
+  summarise(N = n(), .groups = "drop") %>%
+  group_by(sex) %>%
+  mutate(Prop = N / sum(N))
+
+ggplot(dropout_sex_summary, aes(x = sex, y = Prop, fill = dropout_status)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(Prop * 100, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_fill_manual(values = c("Dropout" = "#d73027", "Completer" = "#4575b4")) +
+  labs(
+    title = "Dropout Rate by Sex",
+    x = "Sex",
+    y = "Proportion",
+    fill = "Status"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+
+# Chi-square test
+chisq.test(table(dat %>% 
+                   mutate(sex = factor(sex, labels = c("Male", "Female"))) %>%
+                   pull(sex), 
+                 dat_age_dropout$completer))
+```
+
+## 3.4 Correlation Between Baseline Variables and Missingness
+
+```{r correlation_missingness, fig.width=10, fig.height=8}
+# Create correlation matrix between baseline variables and dropout indicators
+corr_data <- dat %>%
+  select(age, bprs0, cdrsb0, bmi, adl, 
+         dropout_year1, dropout_year2, dropout_year3, 
+         dropout_year4, dropout_year5, dropout_year6)
+
+cor_matrix <- cor(corr_data, use = "pairwise.complete.obs")
+
+# Extract correlations with dropout indicators
+cor_with_dropout <- cor_matrix[1:5, 6:11]
+
+melted_cor <- melt(cor_with_dropout)
+colnames(melted_cor) <- c("Baseline_Variable", "Dropout_Year", "Correlation")
+
+ggplot(melted_cor, aes(x = Dropout_Year, y = Baseline_Variable, fill = Correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Correlation, 2)), color = "white", size = 4) +
+  scale_fill_gradient2(
+    low = "#4575b4", mid = "white", high = "#d73027", 
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  labs(
+    title = "Correlation Between Baseline Variables and Dropout",
+    x = "Dropout Indicator",
+    y = "Baseline Variable"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
