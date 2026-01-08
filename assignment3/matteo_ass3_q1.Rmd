@@ -34,7 +34,7 @@ invisible(lapply(libraries, library, character.only = TRUE))
 
 ```{r load_data}
 # Load data
-dat <- read_sas("dataset/alzheimer25.sas7bdat")
+dat <- read_sas("data/alzheimer25.sas7bdat")
 
 # Reshape to long format
 reshape_dat <- function(dat) {
@@ -133,23 +133,6 @@ vis_miss(dat_wide_key %>% select(starts_with("bprs")),
 #   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-
-
-```{r dropout_percentage, fig.width=10, fig.height=6}
-ggplot(dropout_data, aes(x = time_num, y = Prop_Dropout * 100)) +
-  geom_area(fill = "#A23B72", alpha = 0.5) +
-  geom_line(color = "#A23B72", size = 1.2) +
-  geom_point(color = "#A23B72", size = 3) +
-  geom_text(aes(label = paste0(round(Prop_Dropout * 100, 1), "%")),
-            vjust = -1, size = 3.5) +
-  scale_y_continuous(limits = c(0, 70), breaks = seq(0, 70, 10)) +
-  labs(
-    title = "Cumulative Dropout Rate Over Time",
-    x = "Year",
-    y = "Dropout Rate (%)"
-  ) +
-  theme_minimal(base_size = 14)
-```
 
 ## 2.3 Monotone vs Non-Monotone Missingness
 
