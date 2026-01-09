@@ -392,4 +392,114 @@ qqline(re$trial[, "time_num"])
 <!-- anova(m_noCenter, update(m_full, method = "ML")) -->
 <!-- ``` -->
 
+## Model Diagnostic: Comparing Empirical and Fitted Variance Functions
+
+```{r variance_function_comparison}
+# Load required packages
+library(lme4)
+library(ggplot2)
+
+# ===== Part 1: Calculate and Plot the Empirical Variance Function =====
+
+# Define the full fixed-effects formula (same for both OLS and LMM)
+full_formula <- bprs ~ time_num * (age + adl + job + cdrsb0) + sex + taupet0 + abpet0 + wzc
+
+# Fit preliminary OLS model with the exact same fixed-effects structure
+ols_model <- lm(full_formula, data = dat_long, na.action = na.exclude)
+
+# Calculate squared residuals and add to data frame
+dat_long$ols_residuals_sq <- residuals(ols_model)^2
+
+# Create initial plot with empirical variance function
+p_empirical <- ggplot(dat_long, aes(x = time_num, y = ols_residuals_sq)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(aes(color = "Empirical Variance (Smoothed)"), 
+              method = "loess", se = TRUE, linewidth = 1.2) +
+  scale_color_manual(values = c("Empirical Variance (Smoothed)" = "blue")) +
+  labs(
+    x = "Time",
+    y = "Squared Residuals",
+    color = "Variance Function"
+  ) +
+  theme_minimal(base_size = 12)
+
+p_empirical
+
+```
+
+```{r}
+
+# ===== Part 2: Calculate Fitted Variance Function from Final LMM =====
+
+# Fit the final Linear Mixed Model (already fitted as m6, but refit here for clarity)
+m6_diagnostic <- lmer(bprs ~ time_num * (age + adl + job + cdrsb0) + sex + taupet0 + abpet0 + wzc + 
+                        (time_num | trial/patid),
+                      data = dat_long, REML = TRUE)
+
+# Extract variance components
+vc <- VarCorr(m6_diagnostic)
+
+# Extract variances and covariances from patid:trial level
+var_intercept_patid <- as.numeric(vc$`patid:trial`["(Intercept)", "(Intercept)"])
+var_slope_patid <- as.numeric(vc$`patid:trial`["time_num", "time_num"])
+cov_patid <- as.numeric(vc$`patid:trial`["(Intercept)", "time_num"])
+
+# Extract variances and covariances from trial level
+var_intercept_trial <- as.numeric(vc$trial["(Intercept)", "(Intercept)"])
+var_slope_trial <- as.numeric(vc$trial["time_num", "time_num"])
+cov_trial <- as.numeric(vc$trial["(Intercept)", "time_num"])
+
+# Calculate total variance components (sum across levels)
+Total_Var_Intercept <- var_intercept_patid + var_intercept_trial
+Total_Var_Slope <- var_slope_patid + var_slope_trial
+Total_Covariance <- cov_patid + cov_trial
+
+# Extract residual variance
+Residual_Var <- attr(vc, "sc")^2
+
+# Create fitted variance function
+fitted_var_func <- function(t) {
+  Total_Var_Intercept + t^2 * Total_Var_Slope + 2 * t * Total_Covariance + Residual_Var
+}
+
+# ===== Part 3: Create Final Comparison Plot =====
+
+# Add fitted variance function to the plot
+p_final <- p_empirical +
+  stat_function(aes(color = "Fitted Variance (LMM)"), 
+                fun = fitted_var_func, 
+                linewidth = 1.2) +
+  scale_color_manual(
+    values = c(
+      "Empirical Variance (Smoothed)" = "blue",
+      "Fitted Variance (LMM)" = "red"
+    )
+  ) +
+  labs(
+    title = "Comparison of Empirical and Fitted Variance Functions",
+    subtitle = "Diagnostic check for linear mixed model variance structure",
+    x = "Time (time_num)",
+    y = "Variance",
+    color = "Variance Function"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray30"),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+# Print the final plot
+print(p_final)
+
+# Print variance components for reference
+cat("\n=== Variance Components Summary ===\n")
+cat("Total Random Intercept Variance:", Total_Var_Intercept, "\n")
+cat("Total Random Slope Variance:", Total_Var_Slope, "\n")
+cat("Total Covariance (Intercept, Slope):", Total_Covariance, "\n")
+cat("Residual Variance:", Residual_Var, "\n")
+```
+
 
