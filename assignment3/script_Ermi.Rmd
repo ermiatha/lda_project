@@ -235,13 +235,50 @@ Ok, we have verified that we have no intermittent missingness. Let's now conside
 
 # m5 from assignment1
 model_lmm <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid),
-           data = dat_long, REML = FALSE)
+           data = dat_long_scaled, REML = T)
+model_lmm_quadr <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(time_num0^2) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid),
+           data = dat_long_scaled, REML = T)
+
+model_lmm_add <- lmer(bprs ~ time_num0 + sex + age + adl + job + cdrsb0 + I(time_num0^2) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid), data = dat_long_scaled, REML = T)
+
 
 ```
+
+
+
 
 ```{r}
 summary(model_lmm)
 ```
+
+```{r}
+summary(model_lmm, ddf = "lme4")
+summary(model_lmm_quadr, ddf = "lme4")
+summary(model_lmm_add, ddf = "lme4")
+```
+
+
+Further investigation (trying to reproduce Eddys results):
+> model4 <- lmer(bprs ~ time_num0 + sex + age + adl + cdrsb0 + bmi + I(time_num0^2) + taupet0 + abpet0 + (time_num0 | trial/patid), data = dat_long_scaled, REML = T)
+
+> model4 <- lmer(bprs ~ time_num0 + sex + age + adl + bmi + I(time_num0^2) + taupet0 + abpet0 + (time_num0 | trial/patid), data = dat_long_scaled, REML = T)
+
+> model5 <- lmer(bprs ~ time_num0 + sex + age + adl + bmi + I(time_num0^2) + taupet0 + abpet0 + (time_num0 | patid), data = dat_long_scaled, REML = T)
+
+> model6 <- lmer(bprs ~ time_num0 + sex + age + adl + bmi + I(time_num0^2) + taupet0 + abpet0 + (1 | patid), data = dat_long_scaled, REML = T)
+
+> anova(model4, model5, model6)
+
+ npar   AIC   BIC logLik -2*log(L) Chisq Df Pr(>Chisq)    
+model6   11 -4122 -4048   2072     -4144                        
+model5   13 -6403 -6316   3215     -6429  2285  2     <2e-16 ***
+model4   16 -7872 -7764   3952     -7904  1475  3     <2e-16 ***
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Results indicate that the simplest model (with only random intercept has the best fit. This should be checked again, doesnt't fit Eddys results).
+
+
 #### Mice: Wide Format:
 ##### missing data exploration
 ```{r}
