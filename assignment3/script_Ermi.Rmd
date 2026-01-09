@@ -202,7 +202,6 @@ Ok, we have 29.1% missingness in four variables (long format): In the three cova
 Lets now set up mice:
 
 ##### Mice setup 
-
 ```{r}
 
 # prepare dataframe (wide format)
