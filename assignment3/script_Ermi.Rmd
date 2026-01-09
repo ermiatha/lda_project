@@ -469,7 +469,7 @@ lmer_fits <- with(
   expr = {
     lmerTest::lmer(
       bprs ~ as.numeric(time) * (sex + age + adl + job + cdrsb0) +  # time_num0
-        wzc + taupet + abpet0 +
+        wzc + taupet + abpet0 +  # taupet0 should be used!!
         (as.numeric(time) | trial/patid),
       REML = FALSE
     )
