@@ -108,6 +108,11 @@ dat_long <- dat_long %>%
 
 rm(base)
 
+dat_long <- dat_long %>%
+    mutate(
+        time_num0 = dat_long$time_num - 1
+    )
+
 dat_long_scaled <- dat_long
 vars_to_scale <- c("time_num", "age", "bmi", "adl", "abpet", "taupet", "bprs")
 dat_long_scaled[vars_to_scale] <- sapply(dat_long_scaled[vars_to_scale], scale)
@@ -121,7 +126,7 @@ dat_long_bin <- dat_long %>%
   # Binary outcome: 1 = severe (>10), 0 = non-severe
   mutate(
     cdrsb_bin = as.factor(as.character(ifelse(cdrsb > 10, 1, 0))),
-    time_num0 = dat_long_bin$time_num - 1
+    time_num0 = dat_long$time_num - 1
   )
 
 dat_long_bin_scaled <- dat_long_bin
@@ -556,7 +561,7 @@ stripplot(imp.1, bprs~.imp, pch=20, cex=2)  # blue: observed data, red: imputed 
 ```{r}
 library(broom.mixed)  # run this before pool() argument to prevent error message
 
-implist <- mids2mitml.list(imp.1)
+implist <- mids2mitml.list(imp.glmm)
 
 glmm_fits <- with(
   implist,
@@ -579,7 +584,7 @@ save(glmm_results_df, file = "./results/glmm_results.RData")  # use load() funct
 
 ## For GEE: 
 ```{r}
-model_gee <- geeglm(cdrsb_bin ~ time_num0 + I(time_num0^2) + taupet + adl + abpet + age + sex + bmi,
+model_gee <- geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + taupet + adl + abpet + age + sex + bmi,
                    id = patid_fct,
                    data = dat_long_bin,
                    family = binomial,
