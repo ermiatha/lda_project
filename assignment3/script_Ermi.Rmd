@@ -198,6 +198,47 @@ dat_long_bin %>%
 The last plot nicely illustrates how CDRSB and age seem to be related, but non-random sample attrition acts as a confounder. 
 The probability to be severely impaired increases over time, and mean age decreases over time. Thus, though it seems as if younger individuals are more likely to develop CDRSB, but this is likely driven by the fact that primarily younger patients remain in the study and, likely, the healthier individuals among older patients.
 
+```{r}
+
+plot_data <- dat_long_bin %>%
+  mutate(
+    cdrsb_bin = case_when(
+      is.na(cdrsb_bin) ~ "Missing",
+      TRUE ~ as.character(cdrsb_bin)
+    ),
+    cdrsb_bin = factor(
+      cdrsb_bin,
+      levels = c("0", "1", "Missing")  
+    )
+  )
+
+
+fig_bprs_age_time_miss <- ggplot(plot_data, 
+       aes(x = cdrsb_bin, y = age, fill = cdrsb_bin)) +
+  geom_boxplot(alpha = 0.8, color = "grey20", outlier.shape = 21) +
+  facet_grid(~ time) +
+  scale_fill_brewer(palette = "Set3", name = "CDRSB Category") +
+  labs(
+    x = "CDRSB",
+    y = "Age (years)",
+    title = "Age Distribution by Presence of severe CDRSB Over Time"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "grey20"),
+    strip.text = element_text(face = "plain"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5)
+  )
+
+
+ggsave("./figures/fig_bprs_age_time_miss.png", fig_bprs_age_time_miss, width = 8, height = 4, dpi = 300)
+
+fig_bprs_age_time_miss
+```
+
+
+
 # Explore Missingness
 ```{r}
 
@@ -241,6 +282,9 @@ model_lmm_quadr <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(
 
 model_lmm_add <- lmer(bprs ~ time_num0 + sex + age + adl + job + cdrsb0 + I(time_num0^2) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid), data = dat_long_scaled, REML = T)
 
+model_lmm_interc <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(time_num0^2) + wzc + taupet0 + abpet0 + (1 | patid), data = dat_long_scaled, REML = T)
+
+model_lmm_interc_both <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(time_num0^2) + wzc + taupet0 + abpet0 + (1 | trial) + (1 | patid), data = dat_long_scaled, REML = T)
 
 ```
 
@@ -256,6 +300,8 @@ summary(model_lmm, ddf = "lme4")
 summary(model_lmm_quadr, ddf = "lme4")
 summary(model_lmm_add, ddf = "lme4")
 ```
+
+
 
 
 Further investigation (trying to reproduce Eddys results):
@@ -278,6 +324,18 @@ Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’
 
 Results indicate that the simplest model (with only random intercept has the best fit. This should be checked again, doesnt't fit Eddys results).
 
+Update: its because of scaling. Scaled predictors have an effect on the optimizer, in the scaled models the simpler random effects structure is preferred. However, if we look at the Variance Decomposition:
+
+
+```{r}
+VarCorr(model_lmm)
+VarCorr(model_lmm_add)
+VarCorr(model_lmm_quadr)
+VarCorr(model_lmm_interc)
+VarCorr(model_lmm_interc_both)
+```
+
+We see that our more complex structure (random slope, trial random intercept) actually does capture some of the residual variance. Thus, our random effects structure seems useful nonetheless.
 
 #### Mice: Wide Format:
 ##### missing data exploration
