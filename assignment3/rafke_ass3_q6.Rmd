@@ -43,6 +43,7 @@ dat <- read_sas("./data/alzheimer25.sas7bdat")
 str(dat)
 ```
 
+
 # Data Preparation
 ```{r reshape}
 
@@ -92,17 +93,18 @@ vars_to_scale <- c("time_num", "age", "bmi", "adl", "abpet", "taupet", "bprs")
 dat_long_scaled[vars_to_scale] <- sapply(dat_long_scaled[vars_to_scale], scale)
 ```
 
+
 For the continuous outcome, perform a (brief) sensitivity analysis to assess the potential
 impact of MNAR on the substantive conclusions
 
 The LMM model we used in Assignment 1. 
 ```{r}
-lmm_model <- lmer(bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet + (time_num | trial/patid), data = dat_long, REML=FALSE)
+lmm_model <- lmer(bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet + (time_num | trial/patid), data = dat_long_scaled, REML=FALSE)
 summary(lmm_model)
 ```
 
 
-Various ways to conduct a sensitivity analysis. There is a consequent pattern in missingness, which can be seen below.
+Various ways to conduct a sensitivity analysis. There is a consequent pattern in missingness in BPRS, which can be seen below.
 
 ```{r}
 colSums(is.na(dat_long))
@@ -142,7 +144,7 @@ meth["bprs"] <- "norm"
 shift_arms <- c("5","12","19")
 
 # delta values to try
-delta_grid <- c(-10, -5, 0, 2.5, 5, 10, 15, 20)
+delta_grid <- c(5, 10, 15, 20)
 
 m <- 10
 maxit <- 20
@@ -193,6 +195,22 @@ for (delta in delta_grid) {
   imp_list[[ as.character(delta) ]] <- imp_k
 
   d1 <- complete(imp_k, 1)
+  # imp_k is your mids object for one delta scenario
+  fits <- with(
+  data = imp_k,
+  expr = lmer(
+    bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet +
+      (time_num | trial/patid),
+    REML = FALSE
+    )
+   )
+
+# Convert mira -> list of fitted models
+   fitlist <- fits$analyses
+
+# Pool fixed effects (Rubin’s rules)
+   pooled <- testEstimates(fitlist, var.comp = FALSE)
+   print(pooled)
 
   results_df <- rbind(
     results_df,
@@ -207,6 +225,135 @@ for (delta in delta_grid) {
 
 ```
 
+## Tipping point to pool LMM across imputations
+```{r}
+# ---------- FIX: robustly extract the coefficient table from mitml::testEstimates ----------
+get_mitml_estimates <- function(pooled_obj) {
+  # Different mitml versions store the printed table in different slots.
+  # We check the common ones.
+  candidates <- c("estimates", "results", "table", "coef", "coefficients")
+
+  for (nm in candidates) {
+    if (!is.null(pooled_obj[[nm]])) {
+      tab <- pooled_obj[[nm]]
+      tab <- as.data.frame(tab)
+      tab$term <- rownames(tab)
+      rownames(tab) <- NULL
+
+      # Ensure required columns exist (your printed output uses these names)
+      if (all(c("Estimate", "Std.Error") %in% names(tab))) {
+        return(tab)
+      }
+    }
+  }
+
+  # If none found, show structure to help debugging
+  stop("Could not extract estimates from pooled_obj. Try str(pooled_obj) to see available slots.")
+}
+
+# ---------- Pool one delta ----------
+pool_one_delta <- function(mids_obj, delta_value, terms_keep = NULL) {
+
+  fits <- suppressWarnings(with(
+    data = mids_obj,
+    expr = lmer(
+      bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet +
+        (time_num | trial/patid),
+      REML = FALSE,
+      control = lmerControl(
+        optimizer = "bobyqa",
+        optCtrl = list(maxfun = 2e5),
+        check.conv.singular = "ignore"
+      )
+    )
+  ))
+
+  fitlist <- fits$analyses
+
+  pooled <- testEstimates(fitlist, extra.pars = FALSE)
+
+  tab <- get_mitml_estimates(pooled) %>%
+    mutate(
+      delta = delta_value,
+      conf.low  = Estimate - 1.96 * Std.Error,
+      conf.high = Estimate + 1.96 * Std.Error,
+      n_models = length(fitlist),
+      n_singular = sum(sapply(fitlist, isSingular, tol = 1e-4))
+    )
+
+  if (!is.null(terms_keep)) tab <- tab %>% filter(term %in% terms_keep)
+  tab
+}
+
+# ---------- Deltas + term selection ----------
+delta_vals <- sort(as.numeric(names(imp_list)))
+first_delta <- as.character(delta_vals[1])
+
+tmp_fit <- suppressWarnings(lmer(
+  bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet +
+    (time_num | trial/patid),
+  data = complete(imp_list[[first_delta]], 1),
+  REML = FALSE,
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5),
+    check.conv.singular = "ignore"
+  )
+))
+
+coef_names <- names(fixef(tmp_fit))
+
+# Keep time effect + any trial-by-time interactions IF they exist in your parametrization
+terms_of_interest <- unique(c(
+  "time_num",
+  grep("time_num:trial|trial.*:time_num", coef_names, value = TRUE)
+))
+
+# If you have no trial*time interactions in the model output, don't facet empty panels:
+if (length(terms_of_interest) == 1) {
+  message("No trial×time interaction terms found in fixef(). Plotting only time_num.")
+}
+
+# ---------- Pool across all deltas ----------
+pooled_all <- bind_rows(lapply(delta_vals, function(d) {
+  pool_one_delta(
+    mids_obj = imp_list[[as.character(d)]],
+    delta_value = d,
+    terms_keep = terms_of_interest
+  )
+}))
+
+# ---------- Tipping-point figure ----------
+ggplot(pooled_all, aes(x = delta, y = Estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  geom_line() +
+  geom_point(size = 2) +
+  facet_wrap(~ term, scales = "free_y") +
+  labs(
+    x = "Shift MI applied to imputed BPRS",
+    y = "Pooled fixed-effect estimate (95% CI)",
+    title = "Pooled fixed-effect estimates under 𝛿-adjusted MI"
+  ) +
+  theme_minimal()
+
+tipping <- pooled_all %>%
+  group_by(term) %>%
+  arrange(delta) %>%
+  summarise(
+    any_cross = any(conf.low <= 0 & conf.high >= 0),
+    first_cross_delta = if (any_cross) delta[which(conf.low <= 0 & conf.high >= 0)[1]] else NA_real_,
+    .groups = "drop"
+  )
+
+print(tipping) # results in 0 since there is no tipping point 
+
+```
+
+
+
+
+## Diagnostic plots for Delta-shift 
 
 ```{r}
 # compare shift-imputed data with the original distribution of BPRS 
