@@ -275,12 +275,12 @@ Ok, we have verified that we have no intermittent missingness. Let's now conside
 ```{r}
 
 # m5 from assignment1
-model_lmm <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid),
+model_lmm <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + wzc + taupet0 + abpet0 + (1 | trial) + (time_num0 | patid),
            data = dat_long_scaled, REML = T)
-model_lmm_quadr <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(time_num0^2) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid),
+model_lmm_quadr <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(time_num0^2) + wzc + taupet0 + abpet0 + (1 | trial) + (time_num0 | patid),
            data = dat_long_scaled, REML = T)
 
-model_lmm_add <- lmer(bprs ~ time_num0 + sex + age + adl + job + cdrsb0 + I(time_num0^2) + wzc + taupet0 + abpet0 + (time_num0 | trial/patid), data = dat_long_scaled, REML = T)
+model_lmm_add <- lmer(bprs ~ time_num0 + sex + age + adl + job + cdrsb0 + I(time_num0^2) + wzc + taupet0 + abpet0 + (1 | trial) + (time_num0 | patid), data = dat_long_scaled, REML = T)
 
 model_lmm_interc <- lmer(bprs ~ time_num0 * (sex + age + adl + job + cdrsb0) + I(time_num0^2) + wzc + taupet0 + abpet0 + (1 | patid), data = dat_long_scaled, REML = T)
 
@@ -394,7 +394,7 @@ We start with k=5 donor cases for drawing imputed values.
 
 ##### Imputation
 ```{r}
-imp.lmm <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 10, donors = 5, maxit = 50, seed = 1212, print = F) 
+imp.lmm <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 5, donors = 5, maxit = 5, seed = 1212, print = F) 
 ```
 
 
@@ -564,7 +564,7 @@ We will have to impute in the long format.
 
 # prepare dataframe (wide format)
 dat_mice <- dat_long_scaled %>%
-    select(-patid_fct, -time_num) %>%
+    select(-patid_fct, -time_num, -time_num0, -age_bin) %>%
     mutate(
     patid = as.integer(patid),  # make sure grouping variables are  integer
     trial = as.integer(trial)
@@ -693,6 +693,7 @@ imp.glmm <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 5, donors 
 
 ###### Post-imputation diagnostics
 ```{r}
+imp.1 <- imp.glmm
 conv <- convergence(imp.1, diagnostic = "all")
 
 conv.imputed <- conv %>%
