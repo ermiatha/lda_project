@@ -573,7 +573,7 @@ dat_mice <- dat_long_scaled %>%
 # imputation method
 meth <- make.method(dat_mice)
 # set method for all incomplete vars except bprs to 0 -> dont impute
-meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pmm"
+meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pan"
 
 meth
 
@@ -594,27 +594,77 @@ imp.1 <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 5, donors = 5
 
 
 ##### Post-imputation diagnostics
+
 ```{r}
-conv <- convergence(imp.1, diagnostic = "all")
+pub_theme <- theme_bw(base_size = 14) +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold")
+  )
 
-conv.imputed <- conv %>%
-    filter(vrb %in% c("abpet", "taupet", "cdrsb", "bprs"))
+p_ac <- ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "", # Autocorrelation Across Iterations
+    x = "Iteration",
+    y = "Autocorrelation"
+  ) +
+  pub_theme
 
-conv.imputed
+p_ac
 
+#ggsave("autocorrelation_plot.png", p_ac, width = 7, height = 5, dpi = 300)
+ggsave("./figures/q4_lmm_autocorrelation_plot.png", p_ac, width = 7, height = 5)
+
+p_psrf <- ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "", # Potential Scale Reduction Factor (PSRF)
+    x = "Iteration",
+    y = "PSRF"
+  ) +
+  pub_theme
+
+p_psrf
+
+#ggsave("psrf_plot.png", p_psrf, width = 7, height = 5, dpi = 300)
+ggsave("./figures/q4_lmm_psrf_plot.png", p_psrf, width = 7, height = 5)
+
+
+png("./figures/q4_lmm_trace_plot.png", width = 1200, height = 900, res = 150)
+layout(matrix(1:8, nrow = 4, ncol = 2))   # force 8 panels
+par(mar = c(4, 4, 2, 1))
+#old_par <- par(mfrow = c(4, 1), mar = c(4, 4, 2, 1))  # set layout + margins
 plot(imp.1)
+par(old_par) 
+dev.off()
 
-ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) + 
-    geom_point() +
-    geom_line()
 
-ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) + 
-    geom_point() +
-    geom_line()
+png("./figures/q4_lmm_stripplot_all.png", width = 1200, height = 900, res = 150)
+stripplot(imp.1, pch = 20, cex = 1.5)
+dev.off()
 
-stripplot(imp.1)
-stripplot(imp.1, bprs~.imp, pch=20, cex=2)  # blue: observed data, red: imputed data
+png("./figures/q4_lmm_stripplot_bprs.png", width = 1200, height = 900, res = 150)
+stripplot(
+  imp.1, 
+  bprs ~ .imp,
+  pch = 20,
+  cex = 2,
+  main = "", # BPRS: Observed vs Imputed Values
+  xlab = "Imputation Number",
+  ylab = "BPRS Score"
+)
+dev.off()
+# stripplot(imp.1, bprs~.imp, pch=20, cex=2) 
+
+
 ```
+
 
 #### Analysis
 ```{r}
