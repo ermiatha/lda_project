@@ -350,4 +350,102 @@ ggplot(melted_cor, aes(x = Dropout_Year, y = Baseline_Variable, fill = Correlati
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+# 4. Testing MCAR Assumption via Logistic Regression
+
+## 4.1 Logistic Regression Model for Dropout
+
+```{r}
+# Load Libraries (assuming they are already loaded from your previous script)
+library(dplyr)
+library(tidyr)
+
+# Load required packages
+library(dplyr)
+library(tidyr)
+library(broom) # For tidying model output
+
+# --- Data Preparation (Corrected) ---
+
+# Corrected function to reshape ALL longitudinal variables
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"), 
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+# Corrected function to handle factors and create a correct numeric time variable
+to_factor <- function(dat_long) {
+    dat_long <- dat_long %>%
+        mutate(
+            time_num = as.numeric(time),
+            time = as.factor(time),
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc)
+        )
+    dat_long
+}
+
+# --- Execute the corrected functions ---
+
+# 1. Reshape to long format
+dat_long_base <- reshape_dat(dat)
+dat_long_base <- to_factor(dat_long_base)
+
+# 2. FIX: Create a separate data frame with only baseline covariates
+baseline_covariates <- dat %>%
+  select(patid, abpet0, taupet0, bprs0) # Add any other baseline-only variables here
+
+# 3. FIX: Join the baseline covariates back to the long data frame
+# Now, every row in dat_long will have the patient's specific abpet0 and taupet0 values
+dat_long <- left_join(dat_long_base, baseline_covariates, by = "patid")
+
+
+# --- Dropout Model (Now works correctly) ---
+
+dat_dropout <- dat_long %>%
+  group_by(patid) %>%
+  arrange(time_num) %>%
+  mutate(
+    # Indicator for dropout before the next visit
+    dropout_next_visit = ifelse(is.na(lead(bprs)), 1, 0),
+    # Lagged outcomes to use as predictors
+    BPRS_lag = lag(bprs),
+    CDRSB_lag = lag(cdrsb)
+  ) %>%
+  ungroup() %>%
+  # Filter for valid observations to model
+  filter(
+    !is.na(bprs),         # Must be currently in the study
+    time_num < 6,         # Cannot drop out after the last visit
+    !is.na(BPRS_lag)      # Must have a previous observation to use as a predictor
+  )
+
+# Fit the logistic regression model
+dropout_model <- glm(
+  dropout_next_visit ~ time_num + age + sex + bmi + wzc + abpet0 + taupet0 + bprs0,
+  data = dat_dropout,
+  family = binomial(link = "logit")
+)
+
+# --- Present Results as Odds Ratios ---
+
+# Use broom::tidy to get a clean data frame of results
+odds_ratios <- tidy(dropout_model, conf.int = TRUE, exponentiate = TRUE)
+
+# Display the results
+print(odds_ratios)
+
+# Interpretation Comment
+# If any predictor has a p-value < 0.05, we can reject the null hypothesis that the data are MCAR.
+# This provides evidence that the missingness mechanism is at least MAR, because the probability
+# of dropout depends on observed data.
+```
+
 
