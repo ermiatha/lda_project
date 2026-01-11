@@ -696,7 +696,8 @@ save(lmer_results_df, file = "./results/lmer_results.RData") # use load() functi
 ##### Quadratic time with scaling and centering 
 ```{r}
 # Model 4: A random intercept and slope for patid, no random effects for trial
-model_glmm <- glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + bprs + (time_num0 | patid_fct),
+model_glmm <- glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + #bprs + 
+                        (time_num0 | patid_fct),
                 data = dat_long_bin_scaled,
                 family = binomial(link = "logit"),
                 nAGQ = 1,
@@ -712,7 +713,7 @@ summary(model_glmm)
 
 # prepare dataframe (wide format)
 dat_mice <- dat_long_bin_scaled %>%
-    select(-patid_fct, -time, -time_num) %>%
+    select(-patid_fct, -time, -time_num, -age_bin) %>%
     mutate(
     patid = as.integer(patid),  # make sure grouping variables are  integer
     trial = as.integer(trial)
@@ -721,7 +722,7 @@ dat_mice <- dat_long_bin_scaled %>%
 # imputation method
 meth <- make.method(dat_mice)
 # set method for all incomplete vars except bprs to 0 -> dont impute
-meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pmm"
+meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pan"
 meth[c("cdrsb_bin")] <- "logreg"
 
 meth
@@ -740,40 +741,160 @@ pred[, "cdrsb0"]  <- 0
 imp.glmm <- mice(dat_mice, method = meth, predictorMatrix = pred, m = 5, donors = 5, maxit = 10, seed = 1212, print = F) 
 ```
 
+## Adaptation to prevent convergence issues due to both cdrsb and cdrsb_bin in the imputation model:
 
-###### Post-imputation diagnostics
 ```{r}
-imp.1 <- imp.glmm
+# Convert cdrsb_bin to numeric before imputation
+dat_mice <- dat_long_bin_scaled %>%
+    select(-patid_fct, -time, -time_num, -age_bin) %>%
+    mutate(
+        patid = as.integer(patid),
+        trial = as.integer(trial),
+        cdrsb_bin = as.numeric(as.character(cdrsb_bin))  # Convert factor to 0/1 numeric
+    )
+
+# Imputation setup with correct threshold
+cdrsb_threshold <- 10
+meth <- make.method(dat_mice)
+meth[c("taupet", "abpet", "cdrsb", "bprs")] <- "2l.pan"
+meth["cdrsb_bin"] <- "~as.numeric(cdrsb > 10)"  # Note: > not >=
+
+pred <- make.predictorMatrix(dat_mice)
+pred[, ] <- 0
+pred[, "patid"] <- -2
+pred[, "trial"] <- -2
+pred[, c("taupet0", "abpet0", "cdrsb0")] <- 0
+
+# Set predictors
+pred["cdrsb", c("time_num0", "age", "sex", "edu", "bmi", "bprs")] <- 1
+pred["bprs", c("time_num0", "age", "sex", "cdrsb")] <- 1
+pred["abpet", c("age", "sex", "edu")] <- 1
+pred["taupet", c("age", "sex", "edu")] <- 1
+pred["cdrsb_bin", ] <- 0  # Passive variable, no predictors needed
+
+
+```
+
+```{r}
+# Run imputation
+imp.glmm2 <- mice(dat_mice, 
+              method = meth, 
+              predictorMatrix = pred, 
+              m = 5, 
+              maxit = 10, 
+              seed = 1212, 
+              print = FALSE)
+
+# Check that cdrsb_bin was correctly derived
+complete(imp.glmm2, 1) %>% 
+    select(cdrsb, cdrsb_bin) %>% 
+    head(20)
+```
+
+```{r}
+
+
+# Convert back to factor for analysis if needed
+imp.glmm2_long <- complete(imp.glmm2, "long") %>%
+    mutate(cdrsb_bin = factor(cdrsb_bin, levels = c(0, 1), labels = c("0", "1")))
+
+# Convert back to mids object
+#imp.glmm2 <- as.mids(imp.glmm2_long)
+```
+
+
+
+##### Post-imputation diagnostics
+
+```{r}
+imp.1 <- imp.glmm2
 conv <- convergence(imp.1, diagnostic = "all")
 
 conv.imputed <- conv %>%
-    filter(vrb %in% c("abpet", "taupet", "cdrsb", "bprs"))
+    filter(vrb %in% c("abpet", "taupet", "cdrsb", "bprs", "cdrsb_bin"))
 
-conv.imputed
+pub_theme <- theme_bw(base_size = 14) +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold")
+  )
 
+p_ac <- ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "", # Autocorrelation Across Iterations
+    x = "Iteration",
+    y = "Autocorrelation"
+  ) +
+  pub_theme
+
+p_ac
+
+#ggsave("autocorrelation_plot.png", p_ac, width = 7, height = 5, dpi = 300)
+ggsave("./figures/q4_glmm_autocorrelation_plot.png", p_ac, width = 7, height = 5)
+
+p_psrf <- ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "", # Potential Scale Reduction Factor (PSRF)
+    x = "Iteration",
+    y = "PSRF"
+  ) +
+  pub_theme
+
+p_psrf
+
+#ggsave("psrf_plot.png", p_psrf, width = 7, height = 5, dpi = 300)
+ggsave("./figures/q4_glmm_psrf_plot.png", p_psrf, width = 7, height = 5)
+
+
+# this plot is not saved correctly. we will save it by hand from R studio in two parts.
+png("./figures/q4_glmm_trace_plot.png", width = 1200, height = 900, res = 150)
+layout(matrix(1:8, nrow = 4, ncol = 2))   # force 8 panels
+par(mar = c(4, 4, 2, 1))
+#old_par <- par(mfrow = c(4, 1), mar = c(4, 4, 2, 1))  # set layout + margins
 plot(imp.1)
+par(old_par) 
+dev.off()
 
-ggplot(conv.imputed, aes(x = .it, y = ac, colour = vrb)) + 
-    geom_point() +
-    geom_line()
 
-ggplot(conv.imputed, aes(x = .it, y = psrf, colour = vrb)) + 
-    geom_point() +
-    geom_line()
+png("./figures/q4_glmm_stripplot_all.png", width = 1200, height = 900, res = 150)
+stripplot(imp.1, pch = 20, cex = 1.5)
+dev.off()
 
-stripplot(imp.1)
-stripplot(imp.1, bprs~.imp, pch=20, cex=2)  # blue: observed data, red: imputed data
+png("./figures/q4_glmm_stripplot_bprs.png", width = 1200, height = 900, res = 150)
+stripplot(
+  imp.1, 
+  bprs ~ .imp,
+  pch = 20,
+  cex = 2,
+  main = "", # CDRSB_Bin: Observed vs Imputed Values
+  xlab = "Imputation Number",
+  ylab = "BPRS Score"
+)
+dev.off()
+# stripplot(imp.1, bprs~.imp, pch=20, cex=2) 
+
+
 ```
+
+
 ##### Analysis
 ```{r}
 library(broom.mixed)  # run this before pool() argument to prevent error message
 
-implist <- mids2mitml.list(imp.glmm)
+implist <- mids2mitml.list(imp.glmm2)
 
 glmm_fits <- with(
   implist,
   expr = {
-      glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + bprs + (time_num0 | patid),  # patid should be factor
+      glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + #bprs +
+                (time_num0 | patid),  # patid should be factor
                 family = binomial(link = "logit"),
                 nAGQ = 1,
                 control = glmerControl(optimizer = "bobyqa"))
@@ -787,11 +908,12 @@ glmm_results_df <- as.data.frame(results$estimates)  # different degrees of free
 
 
 save(glmm_results_df, file = "./results/glmm_results.RData")  # use load() function to load dataframe into environment
+length(glmm_fits[[1]]@frame[[1]])  # confirm how many obs were used
 ```
 
 ## For GEE: 
 ```{r}
-model_gee <- geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + taupet + adl + abpet + age + sex + bmi,
+model_gee <- geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + bprs0 + taupet + adl + abpet + age + sex + bmi,
                    id = patid_fct,
                    data = dat_long_bin,
                    family = binomial,
@@ -809,7 +931,7 @@ implist <- mids2mitml.list(imp.glmm)
 gee_fits <- with(
   implist,
   expr = {
-   geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + taupet + adl + abpet + age + sex + bmi,
+   geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + bprs + taupet + adl + abpet + age + sex + bmi,
                    id = patid,
                    family = binomial,
                    corstr = "exchangeable")
@@ -822,5 +944,171 @@ gee_results_df <- as.data.frame(results$estimates)  # different degrees of freed
 round(gee_results_df, 3)
 
 save(gee_results_df, file = "./results/gee_results.RData") # use load() function to load dataframe into environment
+```
+
+
+######## Weighted-GEE Analysis
+
+```{r}
+dat_ipw <- dat_long_bin %>%
+  mutate(
+    time = time_num0,
+    #time2 = time^2,
+    cdrsb_bin_num = as.numeric(as.character(cdrsb_bin)),  # 0/1, NA allowed
+    miss_bprs = ifelse(is.na(bprs), 1, 0),
+    miss_cdrsb = ifelse(is.na(cdrsb), 1, 0),
+    r_miss = ifelse(is.na(cdrsb_bin_num), 0, 1)
+  ) %>%
+  arrange(patid, time)
+
+dat_ipw <- dat_ipw %>%
+  group_by(patid) %>%
+  mutate(
+    cdrsb_bin_lag = lag(cdrsb_bin_num)
+  ) %>%
+  ungroup()
+
+miss_glm <- glm(
+  r_miss ~ time + age + sex + bmi + adl + abpet0 + taupet0 + cdrsb_bin_lag,
+  data = dat_ipw,
+  family = binomial
+)
+
+dat_ipw$pi <- predict(miss_glm, newdata = dat_ipw, type = "response")
+
+miss_glm_time <- glm(
+  r_miss ~ time,
+  data = dat_ipw,
+  family = binomial
+)
+dat_ipw$pi_num <- predict(miss_glm_time, newdata = dat_ipw, type = "response")
+
+dat_ipw_compl <- dat_ipw
+dat_ipw <- dat_ipw %>%
+  mutate(
+    pi = pmax(pi, 1e-6),  # ensure prob values are > 0
+    pi_num = pmax(pi_num, 1e-6),
+    w = pi_num / pi
+  ) %>%
+  filter(r_miss == 1)   # only observed outcomes
+
+summary(dat_ipw$w)
+
+```
+
+
+```{r}
+# now lets reestimate gee model with weights
+
+
+model_wgee <- geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + bprs + taupet + adl + abpet + age + sex + bmi,
+                   id = patid_fct,
+                   data = dat_ipw,
+                   family = binomial,
+                   corstr = "exchangeable",
+                   weights = w)
+
+
+summary(model_wgee)
+nobs(model_wgee)
+```
+
+
+```{r}
+model_miss_cdrsb <- glm(r_miss ~ time + bprs + age + sex + bmi + adl + abpet0 + taupet0 + cdrsb_bin_lag + job + edu + inkomen + wzc,
+                data = dat_ipw_compl,
+                family = binomial(link = "logit")
+                #nAGQ = 1,
+                #control = glmerControl(optimizer = "bobyqa")
+                                       )
+```
+
+
+```{r}
+# Baseline per subject (year 0)
+base <- dat_long %>%
+  filter(time == 0) %>%
+  transmute(
+    patid, trial,
+    # Age = age, Sex = sex, Edu = edu, BMI = bmi, Job = job, Income = inkomen,
+    # ADL = adl, WZC = wzc,
+    bprs0 = bprs
+  )
+
+# Add baseline + time to all rows
+dat_ipw_compl <- dat_ipw_compl %>%
+  left_join(base, by = c("patid","trial"))
+
+rm(base)
+
+```
+
+
+
+# Post-Hoc Further Analyses
+
+Repeat the missingness mdel to predict cdrsb missingness that Matteo created but with all variables
+```{r}
+model_miss_cdrsb <- glm(r_miss ~ time + bprs0 + age + sex + bmi + adl + abpet0 + taupet0 + cdrsb_bin_lag + job + edu + inkomen + wzc,
+                data = dat_ipw_compl,
+                family = binomial(link = "logit"))
+
+summary(model_miss_cdrsb)
+```
+
+
+look at the correlation matrix of all continuous vars
+```{r}
+num_vars <- dat_long_bin[, sapply(dat_long_bin, is.numeric)]
+
+cor_mat <- cor(num_vars, use = "pairwise.complete.obs")
+
+round(cor_mat, 3)
+
+```
+```{r}
+
+age_cdrsb <- dat_long_bin %>%
+    select(age, cdrsb_bin, time_num0) %>%
+    mutate(
+        cdrsb_miss = ifelse(is.na(cdrsb_bin), 1, 0)
+    ) 
+
+age_cdrsb1 <- age_cdrsb %>%
+    filter(cdrsb_miss == 1) %>%
+    summarise(mean_age = mean(age)) 
+
+age_cdrsb0 <- age_cdrsb %>%
+    filter(cdrsb_miss == 0) %>%
+    summarise(mean_age = mean(age)) 
+
+age_cdrsb0
+age_cdrsb1
+
+```
+
+
+Look at how age is related to Nursing Home Residency:
+```{r}
+summary(glm(r_miss ~ time + bprs0 + age + sex + bmi + adl + abpet0 + taupet0 + cdrsb_bin_lag + job + edu + inkomen + wzc,
+                data = dat_ipw_compl,
+                family = binomial(link = "logit")))
+
+dat_long_bin %>%
+    ggplot(aes(x = wzc, y = age)) + 
+    geom_boxplot()
+```
+
+
+Try to fit GLMM also with random quadratic time slopes
+```{r}
+model_glmm_quadr <- glmer(cdrsb_bin ~ time_num0 + I(time_num0^2) + age + sex + bmi + adl + abpet + taupet + bprs + (time_num0 | patid_fct) + (I(time_num0^2) | patid_fct),
+                data = dat_long_bin_scaled,
+                family = binomial(link = "logit"),
+                nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa"))
+
+summary(model_glmm_quadr)
+
 ```
 
