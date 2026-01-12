@@ -931,7 +931,8 @@ implist <- mids2mitml.list(imp.glmm)
 gee_fits <- with(
   implist,
   expr = {
-   geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + bprs + taupet + adl + abpet + age + sex + bmi,
+   geeglm(as.numeric(as.character(cdrsb_bin)) ~ time_num0 + I(time_num0^2) + # bprs 
+              + taupet + adl + abpet + age + sex + bmi,
                    id = patid,
                    family = binomial,
                    corstr = "exchangeable")
