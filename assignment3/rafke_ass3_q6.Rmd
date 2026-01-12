@@ -1,0 +1,383 @@
+---
+title: "Assignment 3"
+author: "Rafke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 6: Sensitivity Analysis 
+
+```{r}
+library(haven)
+library(tidyverse)
+library(patchwork)
+library(pROC)
+library(nlme)
+library(lme4)
+library(data.table)
+library(broom)
+library(lattice)
+library(sjPlot)
+library(xtable)
+library(kableExtra)
+library(mice)
+library(miceadds)
+library(geepack)
+library(mitml)
+library(lmerTest)
+library(broom.mixed)
+library(mitools)
+library(zoo) 
+library(optimx)
+library(dfoptim)
+library(mitml)
+ 
+```
+
+
+```{r}
+dat <- read_sas("./data/alzheimer25.sas7bdat")
+str(dat)
+```
+
+
+# Data Preparation
+```{r reshape}
+
+reshape_dat <- function(dat) {
+    dat_long <- dat %>%
+        pivot_longer(
+            cols = matches("^(bprs|cdrsb|abpet|taupet)\\d+"),
+            names_to = c(".value", "time"),
+            names_pattern = "(.+)(\\d+)"
+        )
+    dat_long
+}
+
+to_factor <- function(dat_long) {
+
+    dat_long <- dat_long %>%
+        mutate(
+            time = as.factor(time),  # coded 0-6
+            sex = as.factor(sex),
+            edu = as.factor(edu),
+            trial = as.factor(trial),
+            job = as.factor(job),
+            wzc = as.factor(wzc),
+            time_num = as.numeric(time)  # coded 1-7
+        )
+    dat_long
+}
+
+dat_long <- reshape_dat(dat)
+dat_long <- to_factor(dat_long)
+
+# Baseline per subject (year 1)
+base <- dat_long %>%
+  filter(time == 0) %>%
+  transmute(
+    patid, trial,
+  )
+
+# Add baseline + time to all rows
+dat_long <- dat_long %>%
+  left_join(base, by = c("patid","trial"))
+
+rm(base)
+
+dat_long_scaled <- dat_long
+vars_to_scale <- c("time_num", "age", "bmi", "adl", "abpet", "taupet", "bprs")
+dat_long_scaled[vars_to_scale] <- sapply(dat_long_scaled[vars_to_scale], scale)
+```
+
+
+For the continuous outcome, perform a (brief) sensitivity analysis to assess the potential
+impact of MNAR on the substantive conclusions
+
+The LMM model we used in Assignment 1. 
+```{r}
+lmm_model <- lmer(bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet + (time_num | trial/patid), data = dat_long_scaled, REML=FALSE)
+summary(lmm_model)
+```
+
+
+Various ways to conduct a sensitivity analysis. There is a consequent pattern in missingness in BPRS, which can be seen below.
+
+```{r}
+colSums(is.na(dat_long))
+
+# 2.1 Create missingness indicator
+dat_long_miss <- dat_long %>%
+  mutate(missing_bprs = ifelse(is.na(bprs), 1, 0))
+
+# 2.2 Frequency table (Time * Missing)
+table(dat_long_miss$time_num, dat_long_miss$missing_bprs)
+
+# 2.3 Proportion missing per time
+miss_summary <- dat_long_miss %>%
+  group_by(time_num) %>%
+  summarise(prop_missing = mean(missing_bprs))
+
+ggplot(miss_summary, aes(x = time_num, y = prop_missing)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = scales::percent(prop_missing, accuracy = 1)),
+            vjust = -0.5, size = 3.5) +
+  scale_y_continuous(labels = scales::percent,
+                     limits = c(0, 0.7),
+                     breaks = seq(0, 1, 0.1)) + 
+  labs(title = "Proportion of missing BPRS by visit year",
+       y = "Proportion missing BPRS", x = "Visit year") +
+  theme_minimal()
+```
+### Shift imputed MNAR / delta approach
+
+```{r configuration MI}
+# predictors & methods
+pred <- quickpred(dat_long, exclude = "patid")
+meth <- make.method(dat_long)
+meth["bprs"] <- "norm"
+
+# arms to shift
+shift_arms <- c("5","12","19")
+
+# delta values to try
+delta_grid <- c(5, 10, 15, 20)
+
+m <- 10
+maxit <- 20
+
+imp0 <- mice(
+  dat_long,
+  m = 1,
+  method = meth,
+  predictorMatrix = pred,
+  maxit = 0,
+  printFlag = FALSE
+)
+
+post_template <- imp0$post
+```
+
+```{r warning=FALSE}
+results_df <- data.frame(
+  delta = numeric(),
+  mean_bprs = numeric(),
+  sd_bprs = numeric(),
+  n_imputed = integer()
+)
+imp_list <- list()
+
+for (delta in delta_grid) {
+
+  message("Running delta = ", delta)
+
+  post_k <- post_template
+  post_k["bprs"] <- paste0(
+    "imp[[j]][ where[[i]], i ] <- imp[[j]][ where[[i]], i ] + ",
+    "ifelse( as.character(data$trial[ where[[i]] ]) %in% c(",
+    paste0("'", shift_arms, "'", collapse = ","),
+    "), ", delta, ", 0 )"
+  )
+
+  # run MI
+  imp_k <- mice(
+    dat_long,
+    m = m,
+    method = meth,
+    predictorMatrix = pred,
+    post = post_k,
+    maxit = maxit,
+    printFlag = FALSE
+  )
+  imp_list[[ as.character(delta) ]] <- imp_k
+
+  d1 <- complete(imp_k, 1)
+  # imp_k is mids object for one delta scenario
+  fits <- with(
+  data = imp_k,
+  expr = lmer(
+    bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet +
+      (time_num | trial/patid),
+    REML = FALSE
+    )
+   )
+
+# Convert mira -> list of fitted models
+   fitlist <- fits$analyses
+
+# Pool fixed effects (Rubin’s rules)
+   pooled <- testEstimates(fitlist, var.comp = FALSE)
+   print(pooled)
+
+  results_df <- rbind(
+    results_df,
+    data.frame(
+      delta = delta,
+      mean_bprs = mean(d1$bprs, na.rm = TRUE),
+      sd_bprs   = sd(d1$bprs, na.rm = TRUE),
+      n_imputed = sum(imp_k$where[,"bprs"])
+    )
+  )
+}
+
+```
+
+## Tipping point to pool LMM across imputations
+```{r}
+get_mitml_estimates <- function(pooled_obj) {
+  # Different mitml versions store the printed table in different slots.
+  # We check the common ones.
+  candidates <- c("estimates", "results", "table", "coef", "coefficients")
+
+  for (nm in candidates) {
+    if (!is.null(pooled_obj[[nm]])) {
+      tab <- pooled_obj[[nm]]
+      tab <- as.data.frame(tab)
+      tab$term <- rownames(tab)
+      rownames(tab) <- NULL
+
+      # Ensure required columns exist (your printed output uses these names)
+      if (all(c("Estimate", "Std.Error") %in% names(tab))) {
+        return(tab)
+      }
+    }
+  }
+
+  # If none found, show structure to help debugging
+  stop("Could not extract estimates from pooled_obj. Try str(pooled_obj) to see available slots.")
+}
+
+# ---------- Pool one delta ----------
+pool_one_delta <- function(mids_obj, delta_value, terms_keep = NULL) {
+
+  fits <- suppressWarnings(with(
+    data = mids_obj,
+    expr = lmer(
+      bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet +
+        (time_num | trial/patid),
+      REML = FALSE,
+      control = lmerControl(
+        optimizer = "bobyqa",
+        optCtrl = list(maxfun = 2e5),
+        check.conv.singular = "ignore"
+      )
+    )
+  ))
+
+  fitlist <- fits$analyses
+
+  pooled <- testEstimates(fitlist, extra.pars = FALSE)
+
+  tab <- get_mitml_estimates(pooled) %>%
+    mutate(
+      delta = delta_value,
+      conf.low  = Estimate - 1.96 * Std.Error,
+      conf.high = Estimate + 1.96 * Std.Error,
+      n_models = length(fitlist),
+      n_singular = sum(sapply(fitlist, isSingular, tol = 1e-4))
+    )
+
+  if (!is.null(terms_keep)) tab <- tab %>% filter(term %in% terms_keep)
+  tab
+}
+
+# ---------- Deltas + term selection ----------
+delta_vals <- sort(as.numeric(names(imp_list)))
+first_delta <- as.character(delta_vals[1])
+
+tmp_fit <- suppressWarnings(lmer(
+  bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet +
+    (time_num | trial/patid),
+  data = complete(imp_list[[first_delta]], 1),
+  REML = FALSE,
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5),
+    check.conv.singular = "ignore"
+  )
+))
+
+coef_names <- names(fixef(tmp_fit))
+
+# Keep time effect + any trial-by-time interactions IF they exist in your parametrization
+terms_of_interest <- unique(c(
+  "time_num",
+  grep("time_num:trial|trial.*:time_num", coef_names, value = TRUE)
+))
+
+# If you have no trial*time interactions in the model output, don't facet empty panels:
+if (length(terms_of_interest) == 1) {
+  message("No trial×time interaction terms found in fixef(). Plotting only time_num.")
+}
+
+# ---------- Pool across all deltas ----------
+pooled_all <- bind_rows(lapply(delta_vals, function(d) {
+  pool_one_delta(
+    mids_obj = imp_list[[as.character(d)]],
+    delta_value = d,
+    terms_keep = terms_of_interest
+  )
+}))
+
+# ---------- Tipping-point figure ----------
+ggplot(pooled_all, aes(x = delta, y = Estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  geom_line() +
+  geom_point(size = 2) +
+  facet_wrap(~ term, scales = "free_y") +
+  labs(
+    x = "Shift MI applied to imputed BPRS",
+    y = "Pooled fixed-effect estimate (95% CI)",
+    title = "Pooled fixed-effect estimates under 𝛿-adjusted MI"
+  ) +
+  theme_minimal()
+
+tipping <- pooled_all %>%
+  group_by(term) %>%
+  arrange(delta) %>%
+  summarise(
+    any_cross = any(conf.low <= 0 & conf.high >= 0),
+    first_cross_delta = if (any_cross) delta[which(conf.low <= 0 & conf.high >= 0)[1]] else NA_real_,
+    .groups = "drop"
+  )
+
+print(tipping) # results in 0 since there is no tipping point 
+
+```
+
+
+
+
+## Diagnostic plots for Delta-shift 
+
+```{r}
+# compare shift-imputed data with the original distribution of BPRS 
+example_imp_df <- imp_list[["10"]]
+plot(example_imp_df) # check convergence 
+densityplot(example_imp_df,    ~ bprs)
+stripplot(example_imp_df, bprs ~ .imp)
+```
+
+Verify that all NA values were detected and imputed correctly 
+```{r}
+# imp is a mids object (imp_shift) or there is complete_list
+# For mids:
+var <- "bprs"
+imputed_rows <- which(example_imp_df$where[, var])
+length(imputed_rows)                 # how many were imputed
+nrow(example_imp_df$imp[[var]])                 # rows in imp$imp[[var]] should match
+
+all(is.na(example_imp_df$data[imputed_rows, var]))
+
+```
+
+
+```{r}
+lmm_model_shift_imp <- lmer(bprs ~ time_num * (sex + age + adl + job + cdrsb) + wzc + taupet + abpet + (time_num | trial/patid), data = example_imp_df$data, REML=FALSE)
+summary(lmm_model_shift_imp)
+```
